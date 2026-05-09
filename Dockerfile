@@ -12,7 +12,10 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY frontend/package.json ./frontend/
 
 # Install pnpm using corepack (built into Node.js 22)
-RUN corepack enable && corepack prepare pnpm@latest --activate
+# Pinned to 10.28.0 to match local toolchain (pnpm@latest >= 10.29 errors on
+# ignored build scripts even when listed in pnpm-workspace.yaml's
+# ignoredBuiltDependencies).
+RUN corepack enable && corepack prepare pnpm@10.28.0 --activate
 
 # Install all dependencies (both root and frontend workspace)
 # This includes devDependencies needed for building

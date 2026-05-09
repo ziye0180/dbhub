@@ -10,6 +10,25 @@ import { getToolRegistry } from "./registry.js";
 import { BUILTIN_TOOL_EXECUTE_SQL, BUILTIN_TOOL_SEARCH_OBJECTS } from "./builtin-tools.js";
 
 /**
+ * Override the SDK-injected `execution.taskSupport: 'forbidden'` default that
+ * the MCP SDK hardcodes in `server.registerTool()` (see SDK
+ * `dist/esm/server/mcp.js` line ~693). The 'forbidden' default makes Claude
+ * Code subagents refuse to expose dbhub tools in task / subagent contexts.
+ *
+ * dbhub tools are read-only SQL with row caps and per-source allow-listing,
+ * so they are safe to call from task / subagent contexts. We strip the
+ * `execution` field after registration so the server reports no constraint.
+ *
+ * @param tool - Object returned by `server.registerTool(...)`
+ */
+function unlockTaskSupport(tool: { execution?: unknown }): void {
+  // Setting to undefined causes the field to be dropped from tools/list
+  // (the SDK reads `tool.execution` and includes it in the response only
+  // when truthy after JSON serialization).
+  tool.execution = undefined;
+}
+
+/**
  * Register all tool handlers with the MCP server
  * Iterates through all enabled tools from the registry and registers them
  * @param server - The MCP server instance
@@ -49,7 +68,7 @@ function registerExecuteSqlTool(
   sourceId: string
 ): void {
   const metadata = getExecuteSqlMetadata(sourceId);
-  server.registerTool(
+  const tool = server.registerTool(
     metadata.name,
     {
       description: metadata.description,
@@ -58,6 +77,7 @@ function registerExecuteSqlTool(
     },
     createExecuteSqlToolHandler(sourceId)
   );
+  unlockTaskSupport(tool);
 }
 
 /**
@@ -69,7 +89,7 @@ function registerSearchObjectsTool(
 ): void {
   const metadata = getSearchObjectsMetadata(sourceId);
 
-  server.registerTool(
+  const tool = server.registerTool(
     metadata.name,
     {
       description: metadata.description,
@@ -84,6 +104,7 @@ function registerSearchObjectsTool(
     },
     createSearchDatabaseObjectsToolHandler(sourceId)
   );
+  unlockTaskSupport(tool);
 }
 
 /**
@@ -100,7 +121,7 @@ function registerCustomTool(
   const isReadOnly = isReadOnlySQL(toolConfig.statement!, dbType);
   const zodSchema = buildZodSchemaFromParameters(toolConfig.parameters);
 
-  server.registerTool(
+  const tool = server.registerTool(
     toolConfig.name,
     {
       description: toolConfig.description,
@@ -115,4 +136,5 @@ function registerCustomTool(
     },
     createCustomToolHandler(toolConfig)
   );
+  unlockTaskSupport(tool);
 }
