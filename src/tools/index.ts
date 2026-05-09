@@ -33,7 +33,7 @@ function unlockTaskSupport(tool: { execution?: unknown }): void {
  * Iterates through all enabled tools from the registry and registers them
  * @param server - The MCP server instance
  */
-export function registerTools(server: McpServer): void {
+export function registerTools(server: McpServer, allowedSources?: string[]): void {
   const sourceIds = ConnectorManager.getAvailableSourceIds();
 
   // Allow zero SQL sources when only Redis sources are configured.
@@ -44,8 +44,15 @@ export function registerTools(server: McpServer): void {
 
   const registry = getToolRegistry();
 
+  // Apply per-key source whitelist (Phase 3 simplified auth). undefined or
+  // ["*"] means "all sources allowed" (caller is unrestricted).
+  const wildcard = !allowedSources || allowedSources.includes("*");
+
   // Register all enabled tools (both built-in and custom) for each source
   for (const sourceId of sourceIds) {
+    if (!wildcard && !allowedSources!.includes(sourceId)) {
+      continue;
+    }
     const enabledTools = registry.getEnabledToolConfigs(sourceId);
 
     for (const toolConfig of enabledTools) {

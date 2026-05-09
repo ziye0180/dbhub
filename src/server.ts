@@ -13,6 +13,7 @@ import { registerRedisToolsForSource } from "./connectors/redis/tools.js";
 import type { RedisSourceConfig } from "./connectors/redis/connector.js";
 import { resolveTransport, resolvePort, resolveSourceConfigs, isDemoMode } from "./config/env.js";
 import { registerTools } from "./tools/index.js";
+import { createAuthMiddleware, isSourceAllowed, type AuthContext } from "./middleware/auth.js";
 import { listSources, getSource } from "./api/sources.js";
 import { listRequests } from "./api/requests.js";
 import { generateStartupTable, buildSourceDisplayInfo } from "./utils/startup-table.js";
@@ -141,19 +142,24 @@ See documentation for more details on configuring database connections.
       initialTools: sourceConfigsData.tools,
     });
 
-    // Create MCP server factory function for HTTP transport
-    // Note: This must be created AFTER ConnectorManager is initialized
-    const createServer = () => {
+    // Create MCP server factory function for HTTP transport.
+    // allowedSources is set per-request from the auth middleware so that
+    // tools/list only returns tools the caller is permitted to use.
+    // (Stateless mode: a fresh server is built per /mcp request.)
+    const createServer = (allowedSources?: string[]) => {
       const server = new McpServer({
         name: SERVER_NAME,
         version: SERVER_VERSION,
       });
 
       // Register SQL tools (both built-in and custom) via the ToolRegistry.
-      registerTools(server);
+      registerTools(server, allowedSources);
 
-      // Register Redis tools (one set per Redis source).
+      // Register Redis tools (one set per allowed Redis source).
       for (const redisSource of redisSources) {
+        if (allowedSources && !isSourceAllowed(redisSource.id, allowedSources)) {
+          continue;
+        }
         registerRedisToolsForSource(server, redisSource.id);
       }
 
@@ -242,27 +248,32 @@ See documentation for more details on configuring database connections.
       const frontendPath = path.join(__dirname, "public");
       app.use(express.static(frontendPath));
 
-      // Health check endpoint
+      // Health check endpoint (public — used by uptime probes / docker healthcheck).
       app.get("/healthz", (req, res) => {
         res.status(200).send("OK");
       });
 
-      // Data sources API endpoints
-      app.get("/api/sources", listSources);
-      app.get("/api/sources/:sourceId", getSource);
-      app.get("/api/requests", listRequests);
+      // Phase 3 Bearer auth: applies to /mcp + /api/sources* + /api/requests.
+      // Workbench static assets (/) and /healthz remain public — see
+      // pm-atlas/projects/dbhub/decisions.md D-008 (Option C).
+      const authMiddleware = createAuthMiddleware();
+
+      // Data sources API endpoints (gated).
+      app.get("/api/sources", authMiddleware, listSources);
+      app.get("/api/sources/:sourceId", authMiddleware, getSource);
+      app.get("/api/requests", authMiddleware, listRequests);
 
       // Main endpoint for streamable HTTP transport
       // SSE streaming (GET requests) is not supported in stateless mode
       // Return 405 Method Not Allowed for GET requests to indicate this
-      app.get("/mcp", (req, res) => {
+      app.get("/mcp", authMiddleware, (req, res) => {
         res.status(405).json({
           error: 'Method Not Allowed',
           message: 'SSE streaming is not supported in stateless mode. Use POST requests with JSON responses.'
         });
       });
 
-      app.post("/mcp", async (req, res) => {
+      app.post("/mcp", authMiddleware, async (req, res) => {
         try {
           // In stateless mode, create a new instance of transport and server for each request
           // to ensure complete isolation. A single instance would cause request ID collisions
@@ -271,7 +282,12 @@ See documentation for more details on configuring database connections.
             sessionIdGenerator: undefined, // Disable session management for stateless mode
             enableJsonResponse: true // Use JSON responses (SSE not supported in stateless mode)
           });
-          const server = createServer();
+
+          // Pull the auth context attached by the middleware. When auth is
+          // disabled, the middleware sets {keyName: "(no auth)", allowedSources: ["*"]}
+          // so the rest of the code path stays uniform.
+          const auth = (req as typeof req & { dbhubAuth?: AuthContext }).dbhubAuth;
+          const server = createServer(auth?.allowedSources);
 
           await server.connect(transport);
           await transport.handleRequest(req, res, req.body);

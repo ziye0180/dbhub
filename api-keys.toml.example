@@ -1,0 +1,62 @@
+# dbhub api-keys.toml — Phase 3 simplified Bearer auth (single-founder design).
+#
+# Copy this file to `api-keys.toml` and fill in real key hashes.
+# Lookup order at startup:
+#   1. $DBHUB_API_KEYS env var
+#   2. ./api-keys.toml (next to dbhub.toml)
+#   3. /app/api-keys.toml (in-container default; mount it via docker volume)
+#   4. /opt/dbhub/api-keys.toml (host install default)
+#
+# If NO file is found at any of those paths, dbhub runs WITHOUT auth
+# (backwards compatible with Phase 1/2 deployments).
+#
+# Generate a key:
+#
+#     node dist/keygen.js ziye-master
+#
+# That prints both the raw key (give it to the client) and the sha256 hash
+# (paste into the [[keys]] entry below). The raw key is shown ONCE — re-run
+# the generator if you lose it.
+#
+# File permissions: chmod 600 api-keys.toml (owner-only read).
+
+# ============================================
+# Master key — full access to all sources
+# ============================================
+[[keys]]
+name = "ziye-master"
+hash = "sha256:REPLACE_ME_WITH_OUTPUT_FROM_KEYGEN"
+sources = ["*"]                       # wildcard = every configured source
+created_at = "2026-05-09"
+# revoked = true                      # set this to disable a key without deleting it
+
+# ============================================
+# Example: scoped key — restricted to one source
+# ============================================
+# [[keys]]
+# name = "alice-readonly"
+# hash = "sha256:REPLACE_ME"
+# sources = ["awakening"]             # only this source; others return 403
+# created_at = "2026-05-10"
+
+# ============================================
+# Client usage
+# ============================================
+#
+# Claude Code (~/.claude.json):
+#   "mcpServers": {
+#     "dbhub": {
+#       "transport": "http",
+#       "url": "https://dbhub.aizmjx.com/mcp",
+#       "headers": {
+#         "Authorization": "Bearer dbhub_sk_RAW_KEY_FROM_KEYGEN"
+#       }
+#     }
+#   }
+#
+# curl smoke test:
+#   curl -s -X POST https://dbhub.aizmjx.com/mcp \
+#     -H "Authorization: Bearer dbhub_sk_RAW_KEY" \
+#     -H "Content-Type: application/json" \
+#     -H "Accept: application/json, text/event-stream" \
+#     -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
