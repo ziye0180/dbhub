@@ -8,6 +8,9 @@ import { fileURLToPath } from "url";
 
 import { ConnectorManager } from "./connectors/manager.js";
 import { ConnectorRegistry } from "./connectors/interface.js";
+import { RedisManager } from "./connectors/redis/manager.js";
+import { registerRedisToolsForSource } from "./connectors/redis/tools.js";
+import type { RedisSourceConfig } from "./connectors/redis/connector.js";
 import { resolveTransport, resolvePort, resolveSourceConfigs, isDemoMode } from "./config/env.js";
 import { registerTools } from "./tools/index.js";
 import { listSources, getSource } from "./api/sources.js";
@@ -84,20 +87,47 @@ See documentation for more details on configuring database connections.
       process.exit(1);
     }
 
-    // Create connector manager and connect to database(s)
+    // Split SQL sources from Redis sources. Redis is handled by a parallel
+    // RedisManager (see src/connectors/redis/) since the SQL Connector
+    // interface is SQL-centric and doesn't fit Redis's key-value model.
+    const allSources = sourceConfigsData.sources;
+    const sqlSources = allSources.filter((s) => s.type !== "redis");
+    const redisSources = allSources.filter((s) => s.type === "redis");
+
+    // Create connector manager and connect to SQL database(s).
     const connectorManager = new ConnectorManager();
-    const sources = sourceConfigsData.sources;
+    const sources = sqlSources;
 
     console.error(`Configuration source: ${sourceConfigsData.source}`);
 
-    // Connect to database(s) - works uniformly for all modes (demo, single DSN, multi-source TOML)
-    await connectorManager.connectWithSources(sources);
+    if (sqlSources.length > 0) {
+      // Connect to SQL database(s) - works uniformly for demo, single DSN, multi-source TOML.
+      await connectorManager.connectWithSources(sqlSources);
+    }
 
-    // Initialize tool registry (manages both built-in and custom tools)
-    // This must happen AFTER ConnectorManager is initialized so source validation works
+    // Register Redis sources in parallel manager (lazy connect on first use).
+    if (redisSources.length > 0) {
+      const redisManager = RedisManager.getInstance();
+      const redisConfigs: RedisSourceConfig[] = redisSources.map((s) => ({
+        id: s.id,
+        description: s.description,
+        host: s.host!,
+        port: s.port ?? 6379,
+        password: s.password,
+        db: typeof s.database === "string" ? Number(s.database) : (s.database as unknown as number) ?? 0,
+        max_keys: s.max_keys,
+        connection_timeout: s.connection_timeout,
+        command_timeout: s.command_timeout,
+      }));
+      console.error(`Registering ${redisSources.length} Redis source(s)...`);
+      redisManager.registerSources(redisConfigs);
+    }
+
+    // Initialize tool registry for SQL sources/tools only.
+    // Redis tools are registered directly in createServer() below.
     const { initializeToolRegistry } = await import("./tools/registry.js");
     initializeToolRegistry({
-      sources: sourceConfigsData.sources,
+      sources: sqlSources,
       tools: sourceConfigsData.tools,
     });
     console.error("Tool registry initialized");
@@ -119,9 +149,13 @@ See documentation for more details on configuring database connections.
         version: SERVER_VERSION,
       });
 
-      // Register tools (both built-in and custom)
-      // All tools are validated and managed by the ToolRegistry
+      // Register SQL tools (both built-in and custom) via the ToolRegistry.
       registerTools(server);
+
+      // Register Redis tools (one set per Redis source).
+      for (const redisSource of redisSources) {
+        registerRedisToolsForSource(server, redisSource.id);
+      }
 
       return server;
     };

@@ -27,12 +27,16 @@ export interface SSHConfig {
  * Database connection parameters (alternative to DSN)
  */
 export interface ConnectionParams {
-  type: "postgres" | "mysql" | "mariadb" | "sqlserver" | "sqlite";
+  type: "postgres" | "mysql" | "mariadb" | "sqlserver" | "sqlite" | "redis";
   host?: string;
   port?: number;
   database?: string;
   user?: string;
   password?: string;
+  /** Redis: max number of keys returned by SCAN/KEYS. Default 1000. */
+  max_keys?: number;
+  /** Redis: command timeout in seconds. Default 5. */
+  command_timeout?: number;
   aws_iam_auth?: boolean; // Enable AWS IAM auth token generation for RDS
   aws_region?: string; // AWS region required when aws_iam_auth is enabled
   instanceName?: string; // SQL Server named instance support

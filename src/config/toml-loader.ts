@@ -241,12 +241,22 @@ function validateSourceConfig(source: SourceConfig, configPath: string): void {
 
   // Validate type if provided
   if (source.type) {
-    const validTypes = ["postgres", "mysql", "mariadb", "sqlserver", "sqlite"];
+    const validTypes = ["postgres", "mysql", "mariadb", "sqlserver", "sqlite", "redis"];
     if (!validTypes.includes(source.type)) {
       throw new Error(
         `Configuration file ${configPath}: source '${source.id}' has invalid type '${source.type}'. ` +
           `Valid types: ${validTypes.join(", ")}`
       );
+    }
+    // For Redis, skip the SQL-style validations below; Redis uses host/port/db.
+    if (source.type === "redis") {
+      // Redis sources require host (port optional, defaults to 6379).
+      if (!source.host) {
+        throw new Error(
+          `Configuration file ${configPath}: redis source '${source.id}' requires 'host'.`
+        );
+      }
+      return; // Skip SQL-only validations (sslmode/sslrootcert/aws_iam_auth/...).
     }
   }
 
@@ -587,6 +597,14 @@ export function buildDSNFromSource(source: SourceConfig): string {
   if (!source.type) {
     throw new Error(
       `Source '${source.id}': 'type' field is required when 'dsn' is not provided`
+    );
+  }
+
+  // Redis sources don't have DSN — they go through RedisManager, not here.
+  if (source.type === "redis") {
+    throw new Error(
+      `Source '${source.id}': Redis sources should not be processed by buildDSNFromSource. ` +
+        `This is a programming error — Redis sources should be filtered out before SQL connector init.`
     );
   }
 

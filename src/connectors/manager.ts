@@ -505,7 +505,8 @@ export class ConnectorManager {
     const parsed = new SafeURL(dsn);
     const hostname = parsed.hostname;
     const username = source.user || parsed.username;
-    const defaultPort = getDefaultPortForType(source.type);
+    // SQL-only path; Redis sources are filtered out before reaching ConnectorManager.
+    const defaultPort = getDefaultPortForType(source.type as ConnectorType);
     const port = parsed.port ? parseInt(parsed.port) : defaultPort;
 
     if (!hostname || !username || !port) {

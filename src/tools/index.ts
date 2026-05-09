@@ -36,8 +36,10 @@ function unlockTaskSupport(tool: { execution?: unknown }): void {
 export function registerTools(server: McpServer): void {
   const sourceIds = ConnectorManager.getAvailableSourceIds();
 
+  // Allow zero SQL sources when only Redis sources are configured.
+  // Redis tools are registered separately via registerRedisToolsForSource() in server.ts.
   if (sourceIds.length === 0) {
-    throw new Error("No database sources configured");
+    return;
   }
 
   const registry = getToolRegistry();

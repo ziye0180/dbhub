@@ -133,10 +133,12 @@ export class ToolRegistry {
     const connectorType = sourceConfig.type;
 
     try {
+      // SQL-only path: ToolRegistry processes only SQL tools. Redis tools are
+      // registered separately via registerRedisToolsForSource and never reach here.
       validateParameters(
         toolConfig.statement,
         toolConfig.parameters,
-        connectorType
+        connectorType as Exclude<typeof connectorType, "redis">
       );
     } catch (error) {
       throw new Error(
