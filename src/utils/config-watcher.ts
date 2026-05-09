@@ -1,8 +1,32 @@
 import fs from "fs";
 import { loadTomlConfig, resolveTomlConfigPath } from "../config/toml-loader.js";
 import { ConnectorManager } from "../connectors/manager.js";
+import { RedisManager } from "../connectors/redis/manager.js";
+import type { RedisSourceConfig } from "../connectors/redis/connector.js";
 import { initializeToolRegistry } from "../tools/registry.js";
 import type { SourceConfig, ToolConfig } from "../types/config.js";
+
+/**
+ * Map a TOML SourceConfig of type=redis to a RedisSourceConfig.
+ * Mirrors the same mapping done at startup in src/server.ts so the two
+ * code paths stay in sync.
+ */
+function toRedisSourceConfig(s: SourceConfig): RedisSourceConfig {
+  return {
+    id: s.id,
+    description: s.description,
+    host: s.host!,
+    port: s.port ?? 6379,
+    password: s.password,
+    db:
+      typeof s.database === "string"
+        ? Number(s.database)
+        : ((s.database as unknown as number) ?? 0),
+    max_keys: s.max_keys,
+    connection_timeout: s.connection_timeout,
+    command_timeout: s.command_timeout,
+  };
+}
 
 const DEBOUNCE_MS = 500;
 
@@ -64,31 +88,57 @@ export function startConfigWatcher(options: ConfigWatcherOptions): (() => void) 
       const oldSources = lastGoodSources;
       const oldTools = lastGoodTools;
 
-      // Disconnect all existing sources
+      // Split sources by type (Nova FB-02): Redis sources live in RedisManager,
+      // not ConnectorManager. Passing redis sources to ConnectorManager.connectWithSources
+      // makes it try to build a SQL DSN like `redis://...` and fail validation, which
+      // then triggers a rollback that takes ALL SQL sources down. Filter early.
+      const newSqlSources = newConfig.sources.filter((s) => s.type !== "redis");
+      const newRedisSources = newConfig.sources.filter((s) => s.type === "redis");
+
+      // Disconnect all existing connections (both SQL and Redis).
       await connectorManager.disconnect();
+      await RedisManager.getInstance().disconnectAll();
 
       try {
-        // Reconnect with new sources
-        await connectorManager.connectWithSources(newConfig.sources);
+        // Reconnect SQL sources (no-op if there are none).
+        if (newSqlSources.length > 0) {
+          await connectorManager.connectWithSources(newSqlSources);
+        }
 
-        // Re-initialize tool registry with new config
+        // Re-register Redis sources (lazy connect on first use).
+        if (newRedisSources.length > 0) {
+          RedisManager.getInstance().registerSources(newRedisSources.map(toRedisSourceConfig));
+        }
+
+        // Re-initialize tool registry with SQL config only — Redis tools are
+        // registered per-server in createServer() via registerRedisToolsForSource.
         initializeToolRegistry({
-          sources: newConfig.sources,
+          sources: newSqlSources,
           tools: newConfig.tools,
         });
 
-        // Update last known-good config
+        // Update last known-good config (full source list, type-tagged).
         lastGoodSources = newConfig.sources;
         lastGoodTools = newConfig.tools;
 
-        console.error("Configuration reloaded successfully.");
+        console.error(
+          `Configuration reloaded successfully (sql: ${newSqlSources.length}, redis: ${newRedisSources.length}).`
+        );
       } catch (connectError) {
         console.error("Failed to connect with new config, rolling back:", connectError);
-        // Clean up any partial connections before rollback
+        // Clean up any partial connections before rollback (both managers).
         try { await connectorManager.disconnect(); } catch { /* best effort */ }
+        try { await RedisManager.getInstance().disconnectAll(); } catch { /* best effort */ }
         try {
-          await connectorManager.connectWithSources(oldSources);
-          initializeToolRegistry({ sources: oldSources, tools: oldTools });
+          const oldSqlSources = oldSources.filter((s) => s.type !== "redis");
+          const oldRedisSources = oldSources.filter((s) => s.type === "redis");
+          if (oldSqlSources.length > 0) {
+            await connectorManager.connectWithSources(oldSqlSources);
+          }
+          if (oldRedisSources.length > 0) {
+            RedisManager.getInstance().registerSources(oldRedisSources.map(toRedisSourceConfig));
+          }
+          initializeToolRegistry({ sources: oldSqlSources, tools: oldTools });
           console.error("Rolled back to previous configuration.");
         } catch (rollbackError) {
           console.error("Rollback also failed, server has no active connections:", rollbackError);
