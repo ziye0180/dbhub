@@ -22,14 +22,28 @@
 
 ## 构建与发布链路
 
-```bash
-# 本地 Mac
-pnpm install && pnpm build
-docker buildx build --platform linux/amd64 \
-  -t registry.cn-hangzhou.aliyuncs.com/aiawaken/awaken-dbhub:latest \
-  -t registry.cn-hangzhou.aliyuncs.com/aiawaken/awaken-dbhub:<commit> --push .
+镜像打包机事实源：`/Users/ziye/project/persona/multi-agents/lyra/employees/_shared/_infra/build-machine/onboarding.md`。脚本 SSOT 位于同目录的 `scripts/build-dbhub-image.sh`，安装到打包机的 `~/aizmjx/build-scripts/build-dbhub-image.sh`。
 
-# prod-B
+```bash
+# 本地开发机：先确认待打包 commit 已经推到 origin
+COMMIT="$(git rev-parse HEAD)"
+git fetch origin
+git branch -r --contains "$COMMIT"
+
+# Mac mini 打包机：先做运行时检查（不构建、不推送）
+ssh -o ClearAllForwardings=yes moyun-mini \
+  '~/aizmjx/build-scripts/build-dbhub-image.sh --check'
+
+# 只推不可变 tag，不触碰 latest
+TAG="$(date +%Y%m%d)-$(git rev-parse --short=12 HEAD)"
+ssh -o ClearAllForwardings=yes moyun-mini \
+  "~/aizmjx/build-scripts/build-dbhub-image.sh --ref $COMMIT --tag $TAG"
+
+# 只有明确批准发布 latest 时才执行；该动作仍不部署生产
+ssh -o ClearAllForwardings=yes moyun-mini \
+  "~/aizmjx/build-scripts/build-dbhub-image.sh --ref $COMMIT --tag $TAG --latest"
+
+# prod-B：独立的生产部署授权动作
 ssh root@39.108.79.68
 cd /www/dbhub
 docker tag registry.cn-hangzhou.aliyuncs.com/aiawaken/awaken-dbhub:latest dbhub:pre-<change>   # 回滚书签
@@ -37,7 +51,7 @@ docker pull registry.cn-hangzhou.aliyuncs.com/aiawaken/awaken-dbhub:latest
 docker compose down && docker compose up -d
 ```
 
-发布纪律: 每次替换镜像前先 `docker tag` 打回滚书签；改 toml / api-keys.toml 前先 `cp` 带日期的 .bak。
+发布纪律: 构建脚本只负责 build + push，不得顺带部署；每次替换镜像前先 `docker tag` 打回滚书签；改 toml / api-keys.toml 前先 `cp` 带日期的 .bak。
 
 ## 配置变更
 

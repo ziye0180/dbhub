@@ -120,3 +120,16 @@
 **Decision**: 本地、CI 与 Dockerfile 统一使用 `pnpm@10.17.1`，以 `package.json#packageManager` 为版本 SSOT。
 
 **Reason**: upstream v0.23.0 已在工作流与 package manifest 中固定 10.17.1。统一版本可以避免 lockfile 由不同 pnpm 版本重复改写，同时仍满足 D-003 禁止使用 `@latest` 的稳定性要求。
+
+## D-009 — Docker 镜像统一交给 Mac mini 打包机
+
+**Date**: 2026-07-13
+**Decided By**: ziye
+
+**Decision**:
+- DBHub 的 `linux/amd64` 镜像只在 `moyun-mini`（用户 `inkroam`）的 Colima 环境构建，本地开发机不再承担 ACR 打包。
+- 构建入口以 Lyra `_infra/build-machine/scripts/build-dbhub-image.sh` 为 SSOT，打包机安装副本位于 `~/aizmjx/build-scripts/build-dbhub-image.sh`。
+- 每次构建必须显式指定已被 origin branch/tag 包含的 Git ref 和不可变镜像 tag；只有明确批准时才用 `--latest` 移动生产可变标签。
+- 脚本使用 Colima `docker` driver 执行 `docker build --platform linux/amd64`，构建后先验证本地架构，再 push 并验证远端 manifest；脚本不负责生产部署。
+
+**Reason**: 生产节点是 x86_64，而日常开发机和打包机都是 Apple Silicon。把跨架构构建收口到已验证的 Mac mini + Colima + Rosetta 基线，可以避免本机 Docker 差异、错误 buildx builder 和 arm64 镜像污染生产，同时把“构建镜像”和“部署生产”拆成两个独立授权动作。

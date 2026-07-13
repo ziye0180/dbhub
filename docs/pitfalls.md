@@ -84,8 +84,8 @@ import type { RedisOptions } from "ioredis";
 
 **Lesson**: env var 跨环境同名不同值是高风险漂移点。同步配置到新环境时，每个凭据都要在目标环境实测（TCP + PING / SELECT 1），不能假设本地值可复用。生产凭据以部署机上现有业务项目的 .env 为准。
 
-## P010 — ACR 推镜像必须显式 buildx amd64
+## P010 — ACR 镜像必须在 Colima docker driver 构建 amd64
 
 **Trigger**: 从 Apple Silicon Mac 直接 `docker push`，prod 机 `docker pull` 报 "no matching manifest for linux/amd64"。
 
-**正确做法**: `docker buildx build --platform linux/amd64 -t <image>:latest -t <image>:<commit> --push`。每次推 ACR 都要显式指定平台，否则 amd64 manifest 缺失。
+**正确做法**: 在 `moyun-mini` 使用共享脚本 `~/aizmjx/build-scripts/build-dbhub-image.sh`。脚本通过 Colima 的 `docker` driver 执行 `docker build --platform linux/amd64`，本地 inspect 确认架构后再 `docker push`，最后核验 ACR manifest 中存在 `linux/amd64`。不要改回 docker-container builder 的 `buildx --push`；该 builder 在现役 Colima 环境缺少所需的 amd64 binfmt。
