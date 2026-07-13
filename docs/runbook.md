@@ -13,12 +13,13 @@
 | 网关机 | 141（8.129.135.141），1Panel OpenResty，proxy 到 prod-B 内网 |
 | 后端容器 | prod-B（39.108.79.68 / 内网 172.16.253.246）端口 8787，`/www/dbhub/` |
 | 镜像 | `registry.cn-hangzhou.aliyuncs.com/aiawaken/awaken-dbhub`（必须 amd64，见 pitfalls P010） |
+| Host 白名单 | 容器启动参数必须包含 `--allowed-hosts dbhub.aizmjx.com`，禁止使用 `*` |
 | 生产 source | awakening / cognitive / awaken-redis（local、online_test 不在 prod，见 data-sources.md） |
 | 本地 | ziye Mac docker，`localhost:8787`，`docker compose up -d` |
 | OpenResty 配置 | `/opt/1panel/www/sites/dbhub.aizmjx.com/proxy/root.conf`，改后 `docker exec <openresty容器> nginx -t` + `kill -HUP <master PID>` reload |
 | SSL | `*.aizmjx.com` 通配证书 |
 
-关键 nginx 事实: proxy 段需显式 `proxy_set_header Authorization $http_authorization` 透传 Bearer；MCP 是 streaming，`proxy_buffering off` + 长 `proxy_read_timeout`。
+关键 nginx 事实: proxy 段需显式 `proxy_set_header Authorization $http_authorization` 透传 Bearer；MCP 是 streaming，`proxy_buffering off` + 长 `proxy_read_timeout`。DBHub 服务端必须显式允许反向代理传入的公网 Host，否则 `/healthz` 正常但 `/mcp` 会在鉴权前返回 403。
 
 ## 构建与发布链路
 
@@ -46,6 +47,7 @@ ssh -o ClearAllForwardings=yes moyun-mini \
 # prod-B：独立的生产部署授权动作
 ssh root@39.108.79.68
 cd /www/dbhub
+# docker-compose.yaml 的 command 必须包含：--allowed-hosts dbhub.aizmjx.com
 docker tag registry.cn-hangzhou.aliyuncs.com/aiawaken/awaken-dbhub:latest dbhub:pre-<change>   # 回滚书签
 docker pull registry.cn-hangzhou.aliyuncs.com/aiawaken/awaken-dbhub:latest
 docker compose down && docker compose up -d

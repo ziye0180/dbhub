@@ -97,3 +97,11 @@ import type { RedisOptions } from "ioredis";
 **根因**: CLI 和服务端解析的是不同文件系统；只挂载 `dbhub.toml` 不会自动共享 `.dbhub/write-leases.json`。
 
 **正确做法**: 宿主机统一使用 `/www/dbhub/.dbhub`，服务容器以 `/app/.dbhub:ro` 挂载；宿主机包装器通过独立的 `--network none` 管理容器短暂读写同一目录。不要把 CLI 暴露成 MCP tool 或 HTTP 管理接口，否则持有普通 Bearer 的 AI 可能自行提权。
+
+## P012 — 反向代理域名必须进入 DBHub Host 白名单
+
+**Trigger**: 公网 `/healthz` 返回 200，但同域名的 `/mcp` 在鉴权前返回 403，日志提示 Host 不允许。
+
+**根因**: 新版 DBHub 默认只允许 loopback 和容器自身地址，以防 DNS rebinding；反向代理保留公网 Host 时，服务端不会自动信任该域名。
+
+**正确做法**: 生产容器启动参数显式配置 `--allowed-hosts dbhub.aizmjx.com`，重建容器后同时验证无 Bearer 为 401、有效 Bearer 可列出 tools。禁止使用 `*`，否则会绕开这层防护。
