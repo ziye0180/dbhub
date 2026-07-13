@@ -133,3 +133,15 @@
 - 脚本使用 Colima `docker` driver 执行 `docker build --platform linux/amd64`，构建后先验证本地架构，再 push 并验证远端 manifest；脚本不负责生产部署。
 
 **Reason**: 生产节点是 x86_64，而日常开发机和打包机都是 Apple Silicon。把跨架构构建收口到已验证的 Mac mini + Colima + Rosetta 基线，可以避免本机 Docker 差异、错误 buildx builder 和 arm64 镜像污染生产，同时把“构建镜像”和“部署生产”拆成两个独立授权动作。
+
+## D-010 — 生产写权限使用宿主机 lease，不开放远程提权 API
+
+**Date**: 2026-07-13
+**Decided By**: ziye
+
+**Decision**:
+- 生产 lease 状态只存放在 prod-B 的 `/www/dbhub/.dbhub`；DBHub 服务容器只读挂载到 `/app/.dbhub`。
+- `/usr/local/bin/dbhub` 是宿主机管理入口，只允许 `enable`、`disable`、`status`，并通过无网络、只读根文件系统的临时容器写 lease。
+- 普通 MCP Bearer 只允许调用数据库工具，不能开启写权限；不增加 HTTP 管理端点，也不把 `enable` 注册成 MCP tool。
+
+**Reason**: 本地 CLI 写本地文件无法控制远程 HTTP 容器。共享宿主机状态目录能保持实现简单，同时让“数据库访问”和“授予数据库写权限”处于两个不同的能力边界；AI 即使持有 MCP Bearer，也无法通过 DBHub 自己完成提权。

@@ -33,7 +33,8 @@
     "test:unit": "vitest run --project unit",
     "test:watch": "vitest",
     "test:integration": "vitest run --project integration",
-    "test:build": "node scripts/smoke-test-build.mjs"
+    "test:build": "node scripts/smoke-test-build.mjs",
+    "test:host-cli": "bash scripts/__tests__/dbhub-host-cli.test.sh"
   },
   "engines": {
     "node": ">=22.5.0"

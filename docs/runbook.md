@@ -9,7 +9,7 @@
 | 项 | 值 |
 |---|---|
 | 公网入口 | `https://dbhub.aizmjx.com/mcp`（Bearer 鉴权，POST JSON-RPC） |
-| 健康检查 | `https://dbhub.aizmjx.com/health` 与 `/healthz`（无需 auth） |
+| 健康检查 | `https://dbhub.aizmjx.com/healthz`（无需 auth；`/health` 当前会落到 Workbench 页面，不作为健康证据） |
 | 网关机 | 141（8.129.135.141），1Panel OpenResty，proxy 到 prod-B 内网 |
 | 后端容器 | prod-B（39.108.79.68 / 内网 172.16.253.246）端口 8787，`/www/dbhub/` |
 | 镜像 | `registry.cn-hangzhou.aliyuncs.com/aiawaken/awaken-dbhub`（必须 amd64，见 pitfalls P010） |
@@ -67,6 +67,28 @@ docker run --rm --entrypoint node registry.cn-hangzhou.aliyuncs.com/aiawaken/awa
 docker compose down && docker compose up -d
 ```
 
+## 临时写权限（生产）
+
+生产 HTTP 服务使用宿主机授权文件，不开放远程管理 API：
+
+| 项 | 值 |
+|---|---|
+| 宿主机状态目录 | `/www/dbhub/.dbhub`，权限 `0700` |
+| 容器读取路径 | `/app/.dbhub:ro` |
+| 宿主机 CLI | `/usr/local/bin/dbhub`，源码为 `scripts/dbhub-host-cli.sh` |
+| 管理容器边界 | `--network none`、根文件系统只读，只有 `.dbhub` 挂载可写 |
+
+```bash
+# ziye 明确授权时，由人在生产宿主机执行
+ssh root@39.108.79.68
+dbhub status
+dbhub enable awakening             # 默认 10 分钟
+dbhub enable cognitive --ttl 30m
+dbhub disable awakening
+```
+
+`dbhub enable` 只创建临时 `INSERT/UPDATE/DELETE` lease；DDL、无 `WHERE` 的 `UPDATE/DELETE`、多语句和 lease 过期后的写入仍然拒绝。AI 收到 `WRITE_ACCESS_REQUIRED` 后只能提示上述命令，不能通过 MCP/Bearer 自行开启权限。
+
 ## 客户端接入
 
 Claude Code `~/.claude.json`（http transport + Bearer）:
@@ -96,7 +118,7 @@ ssh root@39.108.79.68 'docker logs --tail 100 dbhub'
 ssh root@39.108.79.68 'docker logs dbhub 2>&1 | grep -i auth'
 
 # 公网验收四连
-curl -s https://dbhub.aizmjx.com/health                          # 200
+curl -s https://dbhub.aizmjx.com/healthz                         # 200 + OK
 curl -s -X POST https://dbhub.aizmjx.com/mcp -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'            # 无 Bearer -> 401

@@ -89,3 +89,11 @@ import type { RedisOptions } from "ioredis";
 **Trigger**: 从 Apple Silicon Mac 直接 `docker push`，prod 机 `docker pull` 报 "no matching manifest for linux/amd64"。
 
 **正确做法**: 在 `moyun-mini` 使用共享脚本 `~/aizmjx/build-scripts/build-dbhub-image.sh`。脚本通过 Colima 的 `docker` driver 执行 `docker build --platform linux/amd64`，本地 inspect 确认架构后再 `docker push`，最后核验 ACR manifest 中存在 `linux/amd64`。不要改回 docker-container builder 的 `buildx --push`；该 builder 在现役 Colima 环境缺少所需的 amd64 binfmt。
+
+## P011 — Docker 部署必须共享 write-lease 状态目录
+
+**Trigger**: 宿主机执行 `dbhub enable <source>` 显示成功，但 HTTP 服务仍返回 `WRITE_ACCESS_REQUIRED`。
+
+**根因**: CLI 和服务端解析的是不同文件系统；只挂载 `dbhub.toml` 不会自动共享 `.dbhub/write-leases.json`。
+
+**正确做法**: 宿主机统一使用 `/www/dbhub/.dbhub`，服务容器以 `/app/.dbhub:ro` 挂载；宿主机包装器通过独立的 `--network none` 管理容器短暂读写同一目录。不要把 CLI 暴露成 MCP tool 或 HTTP 管理接口，否则持有普通 Bearer 的 AI 可能自行提权。
