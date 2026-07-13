@@ -10,12 +10,16 @@ bower_components/
 # Build outputs
 build/
 dist/
+dist-mcpb/
 out/
 *.min.js
 *.min.css
 
 # Environment & config
-dbhub.toml
+# Anchored to the repo root: only the local runtime config is ignored,
+# checked-in templates like mcpb/dbhub.toml stay tracked.
+/dbhub.toml
+/zyy-server/dbhub.toml
 docs/plans/
 docs/testing/
 .env
@@ -89,4 +93,4 @@ $RECYCLE.BIN/
 *.dll
 *.exe
 *.o
-*.so 
+*.so

@@ -74,17 +74,31 @@ docker run --rm --init \
    --dsn "postgres://user:password@localhost:5432/dbname?sslmode=disable"
 ```
 
-**NPM:**
+**NPM:** (requires Node.js >= 22.5.0)
 
 ```bash
 npx @bytebase/dbhub@latest --transport http --port 8080 --dsn "postgres://user:password@localhost:5432/dbname?sslmode=disable"
 ```
+
+**MCP Bundle (one-click install):**
+
+Download `dbhub-<version>.mcpb` from the [latest release](https://github.com/bytebase/dbhub/releases/latest) and install it in any [MCPB-compatible client](https://github.com/modelcontextprotocol/mcpb) — Claude Desktop (double-click, or drag into Settings → Extensions), Claude Code, or MCP for Windows — then enter your database connection string. The bundle runs locally over stdio, is **read-only by design** (writes are rejected and the database session is set to read-only at the engine level), and needs no remote endpoint or OAuth setup — ideal for giving non-technical teammates curated, read-only database access. Pair it with a least-privilege, read-only database account. See the [MCP Bundle guide](https://dbhub.ai/mcpb) for details and for packaging your own bundle.
 
 **Demo Mode:**
 
 ```bash
 npx @bytebase/dbhub@latest --transport http --port 8080 --demo
 ```
+
+**Restrict to loopback (recommended for production):**
+
+```bash
+npx @bytebase/dbhub@latest --transport http --host 127.0.0.1 --port 8080 --demo
+```
+
+> The HTTP transport defaults to `--host 0.0.0.0`, exposing DBHub on every network interface. For production, bind to `127.0.0.1` and front DBHub with a reverse proxy (nginx/Caddy) or firewall — DBHub does not authenticate HTTP clients.
+>
+> The HTTP transport also has built-in DNS-rebinding protection: it only accepts requests whose `Host` is loopback, this machine's own hostname/IPs, or a name you allow via [`--allowed-hosts`](https://dbhub.ai/config/command-line#allowed-hosts). If a client behind a reverse proxy or custom DNS name gets a `403`, add that hostname with `--allowed-hosts`.
 
 See [Command-Line Options](https://dbhub.ai/config/command-line) for all available parameters.
 
@@ -95,6 +109,8 @@ Connect to multiple databases simultaneously using TOML configuration files. Per
 See [Multi-Database Configuration](https://dbhub.ai/config/toml) for complete setup instructions.
 
 ## Development
+
+Requires Node.js >= 22.5.0 (DBHub uses the built-in `node:sqlite` module).
 
 ```bash
 # Install dependencies

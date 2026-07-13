@@ -14,6 +14,7 @@ DBHub is a zero-dependency, token efficient database MCP server implementing the
 - Test: `pnpm test` - Run all tests
 - Test Watch: `pnpm test:watch` - Run tests in watch mode
 - Integration Tests: `pnpm test:integration` - Run database integration tests (requires Docker)
+- MCP Bundle: `pnpm run build:mcpb` - Package DBHub as an `.mcpb` bundle for MCPB-compatible clients (Claude Desktop, Claude Code, MCP for Windows; see `mcpb/` and `scripts/build-mcpb.mjs`); `pnpm run test:mcpb` smoke-tests the packed bundle over stdio. Published to GitHub releases by `.github/workflows/mcpb-release.yml`. The bundle is read-only by design (`mcpb/dbhub.toml`), with the DSN supplied via the `DBHUB_DSN` env var declared in `mcpb/manifest.json` (TOML `${ENV_VAR}` interpolation).
 
 ## Architecture Overview
 
@@ -121,6 +122,8 @@ DBHub supports three configuration methods (in priority order):
 - `--dsn`: Database connection string
 - `--transport`: `stdio` (default) or `http` for streamable HTTP transport (endpoint: `/mcp`)
 - `--port`: HTTP server port (default: 8080)
+- `--host`: HTTP bind host (default: `0.0.0.0`; env `DBHUB_HOST`)
+- `--allowed-hosts`: Comma-separated extra hostnames accepted in the HTTP `Host`/`Origin` headers, for DNS-rebinding protection (env `DBHUB_ALLOWED_HOSTS`). Loopback is always allowed; on a wildcard bind (`0.0.0.0`/`::`) this machine's hostname and IPs are auto-allowed so local/by-IP access needs no config. Set the flag for other names (e.g. a reverse-proxy/public DNS name); use `*` to disable the check when fronted by your own auth/proxy. See `buildAllowedHosts`/`getSelfHosts` in `src/utils/cross-origin.ts`.
 - `--config`: Path to TOML configuration file
 - `--demo`: Use bundled SQLite employee database
 - `--readonly`: Restrict to read-only SQL operations (deprecated - use TOML configuration instead)

@@ -242,6 +242,33 @@ export class PostgresConnector implements Connector {
         SELECT table_name
         FROM information_schema.tables
         WHERE table_schema = $1
+        AND table_type = 'BASE TABLE'
+        ORDER BY table_name
+      `,
+        [schemaToUse]
+      );
+
+      return result.rows.map((row) => row.table_name);
+    } finally {
+      client.release();
+    }
+  }
+
+  async getViews(schema?: string): Promise<string[]> {
+    if (!this.pool) {
+      throw new Error("Not connected to database");
+    }
+
+    const client = await this.pool.connect();
+    try {
+      const schemaToUse = schema || this.defaultSchema;
+
+      const result = await client.query(
+        `
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema = $1
+        AND table_type = 'VIEW'
         ORDER BY table_name
       `,
         [schemaToUse]
@@ -582,6 +609,34 @@ export class PostgresConnector implements Connector {
         // Single statement - apply maxRows if applicable
         const processedStatement = SQLRowLimiter.applyMaxRows(statements[0], options.maxRows);
 
+        // Engine-level read-only enforcement: when the tool is read-only, run the
+        // statement inside a READ ONLY transaction so the database itself rejects any
+        // write, even one the keyword classifier failed to catch (e.g. SELECT setval()).
+        if (options.readonly) {
+          await client.query('BEGIN READ ONLY');
+          try {
+            const result = parameters && parameters.length > 0
+              ? await client.query(processedStatement, parameters)
+              : await client.query(processedStatement);
+            await client.query('COMMIT');
+            return { rows: result.rows, rowCount: result.rowCount ?? result.rows.length };
+          } catch (error) {
+            // Best-effort rollback so a failed ROLLBACK (e.g. dropped connection)
+            // can't mask the original query error.
+            try {
+              await client.query('ROLLBACK');
+            } catch {
+              // ignore; the original error is more useful
+            }
+            console.error(`[PostgreSQL executeSQL] ERROR: ${(error as Error).message}`);
+            console.error(`[PostgreSQL executeSQL] SQL: ${processedStatement}`);
+            if (parameters && parameters.length > 0) {
+              console.error(`[PostgreSQL executeSQL] Parameters: ${JSON.stringify(parameters)}`);
+            }
+            throw error;
+          }
+        }
+
         // Use parameters if provided
         let result;
         if (parameters && parameters.length > 0) {
@@ -608,8 +663,10 @@ export class PostgresConnector implements Connector {
         let allRows: any[] = [];
         let totalRowCount = 0;
 
-        // Execute within a transaction to ensure session consistency
-        await client.query('BEGIN');
+        // Execute within a transaction to ensure session consistency.
+        // In read-only mode, open it READ ONLY so the engine rejects any write the
+        // keyword classifier missed (defense in depth, not a parser).
+        await client.query(options.readonly ? 'BEGIN READ ONLY' : 'BEGIN');
         try {
           for (let statement of statements) {
             // Apply maxRows limit to SELECT queries if specified
@@ -627,7 +684,13 @@ export class PostgresConnector implements Connector {
           }
           await client.query('COMMIT');
         } catch (error) {
-          await client.query('ROLLBACK');
+          // Best-effort rollback so a failed ROLLBACK can't mask the original
+          // error (read-only violations mid-batch are expected under BEGIN READ ONLY).
+          try {
+            await client.query('ROLLBACK');
+          } catch {
+            // ignore; the original error is more useful
+          }
           throw error;
         }
 

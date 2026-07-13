@@ -7,27 +7,51 @@ import os from 'os';
 describe('JSON RPC Integration Tests', () => {
   let serverProcess: ChildProcess | null = null;
   let testDbPath: string;
+  let testConfigPath: string;
   let baseUrl: string;
   const testPort = 3001;
 
   beforeAll(async () => {
     // Create a temporary SQLite database file
     const tempDir = os.tmpdir();
-    testDbPath = path.join(tempDir, `json_rpc_test_${Date.now()}_${Math.random().toString(36).substr(2, 9)}.db`);
+    const testId = `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    testDbPath = path.join(tempDir, `json_rpc_test_${testId}.db`);
+    testConfigPath = path.join(tempDir, `json_rpc_test_${testId}.toml`);
+    fs.writeFileSync(
+      testConfigPath,
+      `[[sources]]\n` +
+        `id = "default"\n` +
+        `dsn = ${JSON.stringify(`sqlite://${testDbPath}`)}\n\n` +
+        `[[tools]]\n` +
+        `name = "execute_sql"\n` +
+        `source = "default"\n` +
+        `readonly = false\n`
+    );
     
-    baseUrl = `http://localhost:${testPort}`;
+    baseUrl = `http://127.0.0.1:${testPort}`;
     
-    // Start the server as a child process
-    serverProcess = spawn('pnpm', ['dev'], {
-      env: {
-        ...process.env,
-        DSN: `sqlite://${testDbPath}`,
-        TRANSPORT: 'http',
-        PORT: testPort.toString(),
-        NODE_ENV: 'test'
-      },
-      stdio: 'pipe'
-    });
+    // Start only the backend with an isolated TOML config. Using `pnpm dev`
+    // would also start Vite and could load the repository's real dbhub.toml,
+    // allowing an integration test to touch operator-configured databases.
+    serverProcess = spawn(
+      'pnpm',
+      [
+        'exec',
+        'tsx',
+        'src/index.ts',
+        `--config=${testConfigPath}`,
+        '--transport=http',
+        `--port=${testPort}`,
+        '--host=127.0.0.1',
+      ],
+      {
+        env: {
+          ...process.env,
+          NODE_ENV: 'test'
+        },
+        stdio: 'pipe'
+      }
+    );
 
     // Handle server output
     serverProcess.stdout?.on('data', (data) => {
@@ -122,6 +146,9 @@ describe('JSON RPC Integration Tests', () => {
     // Clean up the test database file
     if (testDbPath && fs.existsSync(testDbPath)) {
       fs.unlinkSync(testDbPath);
+    }
+    if (testConfigPath && fs.existsSync(testConfigPath)) {
+      fs.unlinkSync(testConfigPath);
     }
   });
 

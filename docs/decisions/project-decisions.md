@@ -94,3 +94,29 @@
 **Judgment**: P2 暂缓。当前只有 ziye 一个用户，多租户隔离价值低；一旦多 founder / 团队协作则必须有；实施成本不小（toml loader + middleware + workbench 都要改）。
 
 **当前状态**: 完整多租户（tenants/*.toml + per-key 路由）未实施。已实施简化版：单 api-keys.toml + Bearer 鉴权（commit 708b909），生产入口强制 Bearer。
+
+## D-007 — fork 与 upstream 改为人工 merge
+
+**Date**: 2026-07-13
+**Decided By**: ziye
+
+**Supersedes**: D-001 中的 rebase 模式，以及 D-005 的 GitHub UI Sync + 本地 rebase 策略。
+
+**Decision**:
+- 每次同步前先锁定 upstream tag/commit，并创建、推送合并前 backup tag。
+- 使用 merge 保留 fork 与 upstream 的完整历史，不 rebase、不使用 GitHub UI 自动覆盖。
+- 冲突文件按语义人工融合；无文本冲突但双方都修改的文件也必须人工复核。
+- 验证通过后再提交并推送到 `ziye0180/dbhub`。
+
+**Reason**: fork 已包含 Redis、Bearer/source 白名单和 subagent task support 等长期定制。人工 merge 能保留两条历史，并把上游安全修复与本地能力逐项核对。
+
+## D-008 — pnpm 版本与 upstream packageManager 对齐
+
+**Date**: 2026-07-13
+**Decided By**: ziye
+
+**Supersedes**: D-003 的 pnpm 10.28.0 固定版本。
+
+**Decision**: 本地、CI 与 Dockerfile 统一使用 `pnpm@10.17.1`，以 `package.json#packageManager` 为版本 SSOT。
+
+**Reason**: upstream v0.23.0 已在工作流与 package manifest 中固定 10.17.1。统一版本可以避免 lockfile 由不同 pnpm 版本重复改写，同时仍满足 D-003 禁止使用 `@latest` 的稳定性要求。
