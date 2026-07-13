@@ -13,6 +13,60 @@ This page covers command-line flags and environment variables. For TOML configur
 
 Command-line flags are passed when starting DBHub. These have the highest priority and override all other configuration methods.
 
+## Write Access Commands
+
+<!-- Author: ziye -->
+
+These host-side commands manage temporary write leases for TOML sources whose
+`execute_sql` tool is configured with `readonly = true`:
+
+```bash
+dbhub enable <source>                 # default: 10 minutes
+dbhub enable <source> --ttl 30m       # explicit duration, maximum 1 hour
+dbhub enable <source> --config /path/to/dbhub.toml
+dbhub --config /path/to/dbhub.toml enable <source>  # equivalent global-option form
+dbhub status                          # list active/read-only sources
+dbhub disable <source>                # close a lease early
+```
+
+The installed DBHub package exposes the `dbhub` executable. When working from
+a source checkout, build and link that executable once:
+
+```bash
+pnpm run build:backend
+pnpm link --global
+```
+
+Run the commands from the directory containing `dbhub.toml`, or pass the same
+`--config` path used by the server. The lease file contains no database
+credentials and is stored under `.dbhub/write-leases.json` with owner-only
+permissions. Set `DBHUB_STATE_DIR` only when the host CLI and server need to
+resolve the same mounted state directory through different deployment paths.
+
+The commands administer an existing DBHub deployment; they do not start a
+second MCP server.
+
+For Docker Compose, create the host directory before starting DBHub and mount
+it read-only into the server container:
+
+```bash
+mkdir -p .dbhub
+chmod 700 .dbhub
+```
+
+```yaml
+volumes:
+  - ./.dbhub:/app/.dbhub:ro
+```
+
+<Warning>
+The `dbhub enable` command is an administrative capability. Do not expose it as
+an MCP tool or make it available inside the DBHub container. DBHub can separate
+an MCP process from a host user, but no application can distinguish a human
+from an AI process that already has unrestricted shell access under that same
+host account.
+</Warning>
+
 ### --transport
 
 <ParamField path="--transport" type="string" env="TRANSPORT" default="stdio">

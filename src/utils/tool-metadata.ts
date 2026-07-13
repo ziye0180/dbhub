@@ -6,6 +6,7 @@ import { executeSqlSchema } from "../tools/execute-sql.js";
 import { getToolRegistry } from "../tools/registry.js";
 import { BUILTIN_TOOL_EXECUTE_SQL } from "../tools/builtin-tools.js";
 import type { ParameterConfig, ToolConfig } from "../types/config.js";
+import { formatEnableWriteCommand } from "../write-access/index.js";
 
 /**
  * Tool parameter definition for API responses
@@ -137,20 +138,26 @@ export function getExecuteSqlMetadata(sourceId: string): ToolMetadata {
   // Prepend the user-provided `description` from the source config (if set)
   // so AI clients reading the MCP tool list see the source's purpose first.
   const userDescPrefix = buildSourceDescriptionPrefix(sourceConfig.description);
-  const readonlyNote = executeOptions.readonly ? " [READ-ONLY MODE]" : "";
+  const readonlyNote = executeOptions.readonly ? " [READ-ONLY BY DEFAULT]" : "";
   const maxRowsNote = executeOptions.maxRows ? ` (limited to ${executeOptions.maxRows} rows)` : "";
+  const defaultDatabaseNote = sourceConfig.database
+    ? ` Default database: '${sourceConfig.database}'. Other accessible databases may exist; use search_objects with object_type='schema' to discover them and qualify cross-database SQL as database.table.`
+    : "";
+  const temporaryWriteNote = executeOptions.readonly
+    ? ` Write access requires the user to run this command on the DBHub host: ${formatEnableWriteCommand(sourceId)}; never run that authorization command on the user's behalf.`
+    : "";
   const description = isSingleSource
-    ? `${userDescPrefix}Execute SQL queries on the ${dbType} database${readonlyNote}${maxRowsNote}`
-    : `${userDescPrefix}Execute SQL queries on the '${sourceId}' ${dbType} database${readonlyNote}${maxRowsNote}`;
+    ? `${userDescPrefix}Execute SQL queries on the ${dbType} database.${defaultDatabaseNote}${temporaryWriteNote}${readonlyNote}${maxRowsNote}`
+    : `${userDescPrefix}Execute SQL queries on the '${sourceId}' ${dbType} source.${defaultDatabaseNote}${temporaryWriteNote}${readonlyNote}${maxRowsNote}`;
 
   // Build annotations object with all standard MCP hints
-  const isReadonly = executeOptions.readonly === true;
   const annotations = {
     title,
-    readOnlyHint: isReadonly,
-    destructiveHint: !isReadonly, // Can be destructive if not readonly
-    // In readonly mode, queries are more predictable (though still not strictly idempotent due to data changes)
-    // In write mode, queries are definitely not idempotent
+    // Static MCP annotations must describe every state the tool can enter.
+    // A lease-managed tool is read-only by default but can execute DML later.
+    readOnlyHint: false,
+    destructiveHint: true,
+    // Both permanently writable and lease-managed execution can be non-idempotent.
     idempotentHint: false,
     // Database operations are always against internal/closed systems, not open-world
     openWorldHint: false,
@@ -182,9 +189,12 @@ export function getSearchObjectsMetadata(sourceId: string): { name: string; desc
   // Prepend the user-provided `description` from the source config (if set)
   // so AI clients reading the MCP tool list see the source's purpose first.
   const userDescPrefix = buildSourceDescriptionPrefix(sourceConfig.description);
+  const defaultDatabaseNote = sourceConfig.database
+    ? ` Default database: '${sourceConfig.database}'. object_type='schema' lists every accessible non-system database; other object types default to this database unless schema is provided.`
+    : "";
   const description = isSingleSource
-    ? `${userDescPrefix}Search and list database objects on the ${dbType} database`
-    : `${userDescPrefix}Search and list database objects on the '${sourceId}' ${dbType} database`;
+    ? `${userDescPrefix}Search and list database objects on the ${dbType} database.${defaultDatabaseNote}`
+    : `${userDescPrefix}Search and list database objects on the '${sourceId}' ${dbType} source.${defaultDatabaseNote}`;
 
   return {
     name: toolName,

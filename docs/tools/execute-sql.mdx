@@ -137,6 +137,42 @@ In read-only mode, DBHub enforces read-only access in two layers:
 Engine-level enforcement was added in **0.22.6**. Earlier versions relied on the keyword classifier alone.
 </Note>
 
+## Temporary Write Access
+
+<!-- Author: ziye -->
+
+When a TOML `execute_sql` tool has `readonly = true`, a user on the DBHub host
+can temporarily unlock a single source for data changes without editing the
+configuration or restarting the server:
+
+```bash
+# Enables INSERT, UPDATE, and DELETE for 10 minutes
+dbhub enable production
+
+# Override the duration (maximum: 1 hour)
+dbhub enable production --ttl 30m
+
+# Inspect or close leases
+dbhub status
+dbhub disable production
+```
+
+The CLI writes a host-managed lease to `.dbhub/write-leases.json`. A Docker
+deployment should mount `.dbhub` read-only at `/app/.dbhub`, allowing the DBHub
+server to verify leases without granting the server permission to create them.
+Create the host directory before starting the container, then restrict it to
+the host user with mode `0700`.
+
+Without an active lease, a write returns `WRITE_ACCESS_REQUIRED` and tells the
+AI to ask the user to run `dbhub enable <source>`. The AI must never execute the
+authorization command on the user's behalf.
+
+A lease allows exactly one `INSERT`, `UPDATE`, or `DELETE` statement per tool
+call. `UPDATE` and `DELETE` require a top-level `WHERE` clause. DDL,
+administrative SQL, stored routine execution, and multi-statement writes remain
+blocked even while a lease is active. Expired leases are treated as read-only
+without requiring a cleanup command.
+
 <Warning>
 Read-only mode prevents data modification (DML/DDL), but it cannot constrain everything a **privileged database role** can do through *functions*. On PostgreSQL, a superuser or specially-privileged role can still read or write server files and run commands via `pg_read_file`, `lo_export`, `dblink`, and `COPY ... TO PROGRAM` — these are not blocked by a read-only transaction. On MySQL/MariaDB, DDL performs an implicit commit and is stopped only by the keyword classifier.
 

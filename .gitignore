@@ -69,6 +69,9 @@ coverage/
 .nyc_output/
 *.tsbuildinfo
 
+# Runtime write-access leases (host-managed, never commit)
+.dbhub/
+
 # OS files
 .DS_Store
 Thumbs.db

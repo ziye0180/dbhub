@@ -34,7 +34,9 @@ describe("tool-metadata description propagation", () => {
       // Original technical context must still be preserved
       expect(metadata.description).toContain("readonly_limited");
       expect(metadata.description).toContain("sqlite");
-      expect(metadata.description).toContain("[READ-ONLY MODE]");
+      expect(metadata.description).toContain("[READ-ONLY BY DEFAULT]");
+      expect(metadata.annotations.readOnlyHint).toBe(false);
+      expect(metadata.annotations.destructiveHint).toBe(true);
       // User description comes first, technical template follows
       expect(metadata.description.indexOf("Read-only database for safe queries")).toBeLessThan(
         metadata.description.indexOf("Execute SQL queries")

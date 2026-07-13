@@ -2,11 +2,19 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createExecuteSqlToolHandler } from '../execute-sql.js';
 import { ConnectorManager } from '../../connectors/manager.js';
 import { getToolRegistry } from '../registry.js';
+import { getActiveWriteLease } from '../../write-access/index.js';
 import type { Connector, ConnectorType, SQLResult } from '../../connectors/interface.js';
 
 // Mock dependencies
 vi.mock('../../connectors/manager.js');
 vi.mock('../registry.js');
+vi.mock('../../write-access/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../write-access/index.js')>();
+  return {
+    ...actual,
+    getActiveWriteLease: vi.fn(),
+  };
+});
 
 // Mock connector for testing
 const createMockConnector = (id: ConnectorType = 'sqlite', sourceId: string = 'default'): Connector => ({
@@ -36,10 +44,12 @@ describe('execute-sql tool', () => {
   let mockConnector: Connector;
   const mockGetCurrentConnector = vi.mocked(ConnectorManager.getCurrentConnector);
   const mockGetToolRegistry = vi.mocked(getToolRegistry);
+  const mockGetActiveWriteLease = vi.mocked(getActiveWriteLease);
 
   beforeEach(() => {
     mockConnector = createMockConnector('sqlite');
     mockGetCurrentConnector.mockReturnValue(mockConnector);
+    mockGetActiveWriteLease.mockResolvedValue(null);
 
     // Mock tool registry to return empty config (no readonly, no max_rows)
     mockGetToolRegistry.mockReturnValue({
@@ -187,18 +197,99 @@ describe('execute-sql tool', () => {
       ['INSERT', "INSERT INTO users (name) VALUES ('test')"],
       ['UPDATE', "UPDATE users SET name = 'x' WHERE id = 1"],
       ['DELETE', "DELETE FROM users WHERE id = 1"],
-      ['DROP', "DROP TABLE users"],
-      ['CREATE', "CREATE TABLE test (id INT)"],
-      ['ALTER', "ALTER TABLE users ADD COLUMN email VARCHAR(255)"],
-      ['TRUNCATE', "TRUNCATE TABLE users"],
-    ])('should reject %s statement', async (_, sql) => {
+    ])('asks the user to enable write access for %s', async (_, sql) => {
       const handler = createExecuteSqlToolHandler('test_source');
       const result = await handler({ sql }, null);
 
       expect(result.isError).toBe(true);
       const parsedResult = parseToolResponse(result);
-      expect(parsedResult.code).toBe('READONLY_VIOLATION');
+      expect(parsedResult.code).toBe('WRITE_ACCESS_REQUIRED');
+      expect(parsedResult.error).toContain('dbhub enable test_source');
+      expect(parsedResult.error).toContain(
+        "Do not run this authorization command on the user's behalf"
+      );
+      expect(parsedResult.details).toMatchObject({
+        source_id: 'test_source',
+        default_ttl: '10m',
+      });
       expect(mockConnector.executeSQL).not.toHaveBeenCalled();
+    });
+
+    it('fails closed when the write lease state is invalid', async () => {
+      mockGetActiveWriteLease.mockRejectedValue(new Error('Invalid write lease state'));
+
+      const handler = createExecuteSqlToolHandler('test_source');
+      const result = await handler(
+        { sql: "INSERT INTO users (name) VALUES ('test')" },
+        null,
+      );
+
+      expect(parseToolResponse(result).code).toBe('WRITE_ACCESS_STATE_INVALID');
+      expect(mockConnector.executeSQL).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['DROP', "DROP TABLE users"],
+      ['CREATE', "CREATE TABLE test (id INT)"],
+      ['ALTER', "ALTER TABLE users ADD COLUMN email VARCHAR(255)"],
+      ['TRUNCATE', "TRUNCATE TABLE users"],
+    ])('rejects %s even when a lease exists', async (_, sql) => {
+      mockGetActiveWriteLease.mockResolvedValue({
+        source_id: 'test_source',
+        operations: ['insert', 'update', 'delete'],
+        enabled_at: '2026-07-13T12:00:00.000Z',
+        expires_at: '2026-07-13T12:10:00.000Z',
+      });
+
+      const handler = createExecuteSqlToolHandler('test_source');
+      const result = await handler({ sql }, null);
+
+      expect(parseToolResponse(result).code).toBe('WRITE_OPERATION_NOT_ALLOWED');
+      expect(mockConnector.executeSQL).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['UPDATE', "UPDATE users SET name = 'x'"],
+      ['DELETE', "DELETE FROM users"],
+    ])('rejects %s without WHERE even when a lease exists', async (_, sql) => {
+      mockGetActiveWriteLease.mockResolvedValue({
+        source_id: 'test_source',
+        operations: ['insert', 'update', 'delete'],
+        enabled_at: '2026-07-13T12:00:00.000Z',
+        expires_at: '2026-07-13T12:10:00.000Z',
+      });
+
+      const handler = createExecuteSqlToolHandler('test_source');
+      const result = await handler({ sql }, null);
+
+      expect(parseToolResponse(result).code).toBe('WRITE_OPERATION_NOT_ALLOWED');
+      expect(mockConnector.executeSQL).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['INSERT', "INSERT INTO users (name) VALUES ('test')"],
+      ['UPDATE', "UPDATE users SET name = 'x' WHERE id = 1"],
+      ['DELETE', "DELETE FROM users WHERE id = 1"],
+    ])('allows %s with an active lease', async (_, sql) => {
+      const lease = {
+        source_id: 'test_source',
+        operations: ['insert', 'update', 'delete'] as const,
+        enabled_at: '2026-07-13T12:00:00.000Z',
+        expires_at: '2026-07-13T12:10:00.000Z',
+      };
+      mockGetActiveWriteLease.mockResolvedValue(lease);
+      vi.mocked(mockConnector.executeSQL).mockResolvedValue({ rows: [], rowCount: 1 });
+
+      const handler = createExecuteSqlToolHandler('test_source');
+      const result = await handler({ sql }, null);
+      const parsedResult = parseToolResponse(result);
+
+      expect(parsedResult.success).toBe(true);
+      expect(parsedResult.data.write_access.expires_at).toBe(lease.expires_at);
+      expect(mockConnector.executeSQL).toHaveBeenCalledWith(sql, {
+        readonly: false,
+        maxRows: undefined,
+      });
     });
 
     it('should reject multi-statement with any write operation', async () => {
@@ -207,7 +298,7 @@ describe('execute-sql tool', () => {
       const result = await handler({ sql }, null);
 
       expect(result.isError).toBe(true);
-      expect(parseToolResponse(result).code).toBe('READONLY_VIOLATION');
+      expect(parseToolResponse(result).code).toBe('WRITE_OPERATION_NOT_ALLOWED');
     });
 
   });
@@ -240,7 +331,7 @@ describe('execute-sql tool', () => {
       const handler = createExecuteSqlToolHandler('limited_source');
       const result = await handler({ sql: "DELETE FROM users" }, null);
 
-      expect(parseToolResponse(result).code).toBe('READONLY_VIOLATION');
+      expect(parseToolResponse(result).code).toBe('WRITE_OPERATION_NOT_ALLOWED');
     });
   });
 
@@ -270,7 +361,7 @@ describe('execute-sql tool', () => {
       const handler = createExecuteSqlToolHandler('test_source');
       const result = await handler({ sql }, null);
 
-      expect(parseToolResponse(result).code).toBe('READONLY_VIOLATION');
+      expect(parseToolResponse(result).code).toBe('WRITE_OPERATION_NOT_ALLOWED');
     });
 
     it('should reject MySQL conditional comment bypass with mysql connector', async () => {
@@ -281,7 +372,7 @@ describe('execute-sql tool', () => {
       const handler = createExecuteSqlToolHandler('mysql_source');
       const result = await handler({ sql }, null);
 
-      expect(parseToolResponse(result).code).toBe('READONLY_VIOLATION');
+      expect(parseToolResponse(result).code).toBe('WRITE_OPERATION_NOT_ALLOWED');
     });
 
     it('should reject MariaDB M-bang comment bypass with mariadb connector', async () => {
@@ -292,7 +383,7 @@ describe('execute-sql tool', () => {
       const handler = createExecuteSqlToolHandler('mariadb_source');
       const result = await handler({ sql }, null);
 
-      expect(parseToolResponse(result).code).toBe('READONLY_VIOLATION');
+      expect(parseToolResponse(result).code).toBe('WRITE_OPERATION_NOT_ALLOWED');
     });
 
     it('should reject write statement hidden after comment', async () => {
@@ -300,7 +391,7 @@ describe('execute-sql tool', () => {
       const handler = createExecuteSqlToolHandler('test_source');
       const result = await handler({ sql }, null);
 
-      expect(parseToolResponse(result).code).toBe('READONLY_VIOLATION');
+      expect(parseToolResponse(result).code).toBe('WRITE_ACCESS_REQUIRED');
     });
   });
 

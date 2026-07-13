@@ -36,6 +36,7 @@ DBHub is a zero-dependency, token efficient MCP server implementing the Model Co
 - **Multi-Database**: PostgreSQL, MySQL, MariaDB, SQL Server, and SQLite through a single interface
 - **Multi-Connection**: Connect to multiple databases simultaneously with TOML configuration
 - **Guardrails**: Read-only mode, row limiting, and query timeout to prevent runaway operations
+- **User-Gated Writes**: Keep AI access read-only by default and temporarily enable DML per source with `dbhub enable <source>`
 - **Secure Access**: SSH tunneling and SSL/TLS encryption
 
 ## Supported Databases

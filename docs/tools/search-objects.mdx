@@ -4,6 +4,14 @@ title: "search_objects"
 
 Search and list database objects (schemas, tables, columns, procedures, functions, indexes) with pattern matching. This unified tool supports both targeted searches and browsing all objects, implementing progressive disclosure to minimize token usage.
 
+<!-- Author: ziye -->
+
+For MySQL and MariaDB, `object_type = "schema"` lists every accessible
+non-system database and identifies the configured default in `default_schema`.
+All other object types stay scoped to the configured default database unless
+the caller supplies `schema`. This exposes cross-database discovery without
+making ordinary searches fan out across the whole server.
+
 ## Parameters
 
 - `object_type` (required): Type of object to search - `"schema"`, `"table"`, `"column"`, `"procedure"`, `"function"`, or `"index"`

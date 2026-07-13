@@ -2,6 +2,7 @@
 
 import { main } from "./server.js";
 import { loadConnectors } from "./utils/module-loader.js";
+import { tryRunCliCommand } from "./cli/index.js";
 
 // Each load function uses a string literal so the bundler can resolve it.
 const connectorModules = [
@@ -12,8 +13,14 @@ const connectorModules = [
   { load: () => import("./connectors/mariadb/index.js"), name: "MariaDB", driver: "mariadb" },
 ];
 
-loadConnectors(connectorModules)
-  .then(() => main())
+tryRunCliCommand(process.argv.slice(2))
+  .then(async (commandHandled) => {
+    if (commandHandled) {
+      return;
+    }
+    await loadConnectors(connectorModules);
+    await main();
+  })
   .catch((error) => {
     console.error("Fatal error:", error);
     process.exit(1);

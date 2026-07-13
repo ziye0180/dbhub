@@ -127,6 +127,30 @@ describe('search_database_objects tool', () => {
         table_count: 2,
       });
     });
+
+    it('lists every accessible schema even when the connector has a default schema', async () => {
+      mockConnector.getDefaultSchema = vi.fn().mockResolvedValue('public');
+
+      const handler = createSearchDatabaseObjectsToolHandler();
+      const result = await handler(
+        {
+          object_type: 'schema',
+          pattern: '%',
+          detail_level: 'names',
+        },
+        null
+      );
+
+      const parsed = parseToolResponse(result);
+      expect(parsed.data.default_schema).toBe('public');
+      expect(parsed.data.results.map((item: any) => item.name)).toEqual([
+        'public',
+        'private',
+        'production',
+        'development',
+        'test',
+      ]);
+    });
   });
 
   describe('search tables', () => {
@@ -159,6 +183,24 @@ describe('search_database_objects tool', () => {
         'user_profiles',
         'user_sessions',
       ]);
+    });
+
+    it('uses only the connector default schema when schema is omitted', async () => {
+      mockConnector.getDefaultSchema = vi.fn().mockResolvedValue('public');
+      vi.mocked(mockConnector.getSchemas).mockResolvedValue(['public', 'private']);
+
+      const handler = createSearchDatabaseObjectsToolHandler();
+      await handler(
+        {
+          object_type: 'table',
+          pattern: '%',
+          detail_level: 'names',
+        },
+        null
+      );
+
+      expect(mockConnector.getTables).toHaveBeenCalledWith('public');
+      expect(mockConnector.getTables).not.toHaveBeenCalledWith('private');
     });
 
     it('should filter by schema parameter', async () => {
@@ -471,6 +513,24 @@ describe('search_database_objects tool', () => {
         'user_summary',
         'recent_orders',
       ]);
+    });
+
+    it('uses only the connector default schema when listing views without a schema filter', async () => {
+      mockConnector.getDefaultSchema = vi.fn().mockResolvedValue('public');
+      vi.mocked(mockConnector.getSchemas).mockResolvedValue(['public', 'private']);
+
+      const handler = createSearchDatabaseObjectsToolHandler();
+      await handler(
+        {
+          object_type: 'view',
+          pattern: '%',
+          detail_level: 'names',
+        },
+        null
+      );
+
+      expect(mockConnector.getViews).toHaveBeenCalledWith('public');
+      expect(mockConnector.getViews).not.toHaveBeenCalledWith('private');
     });
 
     it('should filter views by schema parameter', async () => {
@@ -1370,7 +1430,7 @@ describe('search_database_objects tool', () => {
       expect(mockConnector.getTables).toHaveBeenCalledWith('configured_db');
     });
 
-    it('scopes schema listing to the default schema', async () => {
+    it('lists all schemas while identifying the configured default', async () => {
       vi.mocked((mockConnector as any).getDefaultSchema).mockResolvedValue('configured_db');
 
       const handler = createSearchDatabaseObjectsToolHandler();
@@ -1380,7 +1440,12 @@ describe('search_database_objects tool', () => {
       );
 
       const parsed = parseToolResponse(result);
-      expect(parsed.data.results.map((r: any) => r.name)).toEqual(['configured_db']);
+      expect(parsed.data.default_schema).toBe('configured_db');
+      expect(parsed.data.results.map((r: any) => r.name)).toEqual([
+        'configured_db',
+        'other_db',
+        'third_db',
+      ]);
     });
 
     it('falls back to the full schema list when no default is configured (null)', async () => {

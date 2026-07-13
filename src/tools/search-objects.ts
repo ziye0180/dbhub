@@ -144,7 +144,9 @@ async function searchSchemas(
   detailLevel: DetailLevel,
   limit: number
 ): Promise<any[]> {
-  const schemas = await resolveDefaultSchemas(connector);
+  // Schema/database discovery is intentionally instance-wide. Object searches
+  // remain scoped to the configured default unless the caller names a schema.
+  const schemas = await connector.getSchemas();
   const regex = likePatternToRegex(pattern);
   const matched = schemas.filter((schema: string) => regex.test(schema)).slice(0, limit);
 
@@ -296,7 +298,7 @@ async function searchViews(
   if (schemaFilter) {
     schemasToSearch = [schemaFilter];
   } else {
-    schemasToSearch = await connector.getSchemas();
+    schemasToSearch = await resolveDefaultSchemas(connector);
   }
 
   // Search views in each schema
@@ -672,6 +674,9 @@ export function createSearchDatabaseObjectsToolHandler(sourceId?: string) {
       }
 
       let results: any[] = [];
+      const defaultSchema = object_type === "schema" && connector.getDefaultSchema
+        ? await connector.getDefaultSchema()
+        : undefined;
 
       // Route to appropriate search function
       switch (object_type) {
@@ -708,6 +713,7 @@ export function createSearchDatabaseObjectsToolHandler(sourceId?: string) {
         schema,
         table,
         detail_level,
+        ...(object_type === "schema" ? { default_schema: defaultSchema ?? null } : {}),
         count: results.length,
         results,
         truncated: results.length === limit,
