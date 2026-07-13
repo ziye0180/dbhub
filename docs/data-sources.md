@@ -37,7 +37,7 @@
 ## 只读约束（硬边界）
 
 - 所有 SQL source `readonly = true`，默认拒绝 INSERT / UPDATE / DELETE；只有 ziye 在 DBHub 宿主机执行 `dbhub enable <source>` 后，目标 source 才在有界 TTL 内临时允许 DML（见 `project-decisions.md` D-010）
-- DDL、多语句、无 `WHERE` 的 UPDATE / DELETE 始终拒绝；AI 不能通过 MCP 或 Bearer 自行开启 lease
+- DDL、包含写操作的多语句、无 `WHERE` 的 UPDATE / DELETE 始终拒绝；纯只读多语句仍按既有行为允许；AI 不能通过 MCP 或 Bearer 自行开启 lease
 - 每个 SQL source 同时暴露 `execute_sql_<source>` 和 `search_objects_<source>`；AI 用 `search_objects` 的 `object_type = "schema"` 主动发现账号实际可见数据库，不需要先执行 `SHOW DATABASES`
 - Redis 侧是白名单只读工具集，写命令在 connector 类上没有 method，无法透传（见 decisions/redis-connector-decisions.md D-002）
 - `max_rows = 5000`（决策见 decisions/project-decisions.md D-004）；`max_keys = 1000`
