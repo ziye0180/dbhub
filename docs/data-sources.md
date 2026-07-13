@@ -14,6 +14,7 @@
 |---|---|---|---|
 | `awakening` | `awaken_social_feed` @ 47.113.127.19（自建 MySQL） | 觉醒学院/觉醒星球: 内容、邀请、用户（`awaken_user`、`awaken_feed_content`、`awaken_category` 等 18 张表） | 高 |
 | `cognitive` | `awaken_payment` @ 阿里云 RDS（rm-wz9oiykl2xg37t3pu0o） | 认知图解: 支付订单、钱包、用户（`ap_user`、`ap_payment_order`、`ap_wallet_*` 等 58 张表） | 高 |
+| `fast_test` | `fast_test` @ 外部 MySQL | 生产网关上的外部 MySQL 测试 source | 低 |
 | `awaken-redis` | Redis @ 生产内网 172.16.0.145:6379（prod）/ 本地 docker（dev） | awaken 后端 cache + session + queue | 中 |
 | `local` | `awaken_social_feed` @ 本地 Docker | 开发/测试。只在本地 Mac 有意义，prod 机上无意义（不部署） | 中 |
 | `online_test` | 经 SSH tunnel（117.72.176.28） | 线上测试环境。prod-B 上因无 SSH 私钥未部署 | 低 |
@@ -35,7 +36,9 @@
 
 ## 只读约束（硬边界）
 
-- 所有 SQL source `readonly = true`，AI 永远不能 INSERT / UPDATE / DELETE 业务库；SQL 写命令由 allowed-keywords 校验拦截
+- 所有 SQL source `readonly = true`，默认拒绝 INSERT / UPDATE / DELETE；只有 ziye 在 DBHub 宿主机执行 `dbhub enable <source>` 后，目标 source 才在有界 TTL 内临时允许 DML（见 `project-decisions.md` D-010）
+- DDL、多语句、无 `WHERE` 的 UPDATE / DELETE 始终拒绝；AI 不能通过 MCP 或 Bearer 自行开启 lease
+- 每个 SQL source 同时暴露 `execute_sql_<source>` 和 `search_objects_<source>`；AI 用 `search_objects` 的 `object_type = "schema"` 主动发现账号实际可见数据库，不需要先执行 `SHOW DATABASES`
 - Redis 侧是白名单只读工具集，写命令在 connector 类上没有 method，无法透传（见 decisions/redis-connector-decisions.md D-002）
 - `max_rows = 5000`（决策见 decisions/project-decisions.md D-004）；`max_keys = 1000`
 - 生产入口强制 Bearer 鉴权

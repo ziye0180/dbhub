@@ -14,7 +14,7 @@
 | 后端容器 | prod-B（39.108.79.68 / 内网 172.16.253.246）端口 8787，`/www/dbhub/` |
 | 镜像 | `registry.cn-hangzhou.aliyuncs.com/aiawaken/awaken-dbhub`（必须 amd64，见 pitfalls P010） |
 | Host 白名单 | 容器启动参数必须包含 `--allowed-hosts dbhub.aizmjx.com`，禁止使用 `*` |
-| 生产 source | awakening / cognitive / awaken-redis（local、online_test 不在 prod，见 data-sources.md） |
+| 生产 source | awakening / cognitive / fast_test / awaken-redis（local、online_test 不在 prod，见 data-sources.md） |
 | 本地 | ziye Mac docker，`localhost:8787`，`docker compose up -d` |
 | OpenResty 配置 | `/opt/1panel/www/sites/dbhub.aizmjx.com/proxy/root.conf`，改后 `docker exec <openresty容器> nginx -t` + `kill -HUP <master PID>` reload |
 | SSL | `*.aizmjx.com` 通配证书 |
@@ -90,6 +90,8 @@ dbhub disable awakening
 ```
 
 `dbhub enable` 只创建临时 `INSERT/UPDATE/DELETE` lease；DDL、无 `WHERE` 的 `UPDATE/DELETE`、多语句和 lease 过期后的写入仍然拒绝。AI 收到 `WRITE_ACCESS_REQUIRED` 后只能提示上述命令，不能通过 MCP/Bearer 自行开启权限。
+
+每个生产 SQL source 必须同时配置 `execute_sql` 与 `search_objects`。后者让 AI 通过 `object_type = "schema"` 获取账号实际可见数据库；不要让工具描述指向一个未注册的 `search_objects`。
 
 ## 客户端接入
 
