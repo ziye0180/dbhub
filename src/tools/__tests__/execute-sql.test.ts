@@ -417,6 +417,7 @@ DEALLOCATE PREPARE stmt;
       expect(mockConnector.executeSQL).toHaveBeenCalledWith(migrationSql, {
         readonly: false,
         maxRows: undefined,
+        database: 'awaken_pro_prod',
       });
     });
 
@@ -435,8 +436,11 @@ DEALLOCATE PREPARE stmt;
       expect(mockConnector.executeSQL).not.toHaveBeenCalled();
     });
 
-    it('fails closed when the runtime default database differs from configuration', async () => {
-      vi.mocked(mockConnector.getDefaultSchema!).mockResolvedValue('awaken_payment');
+    it('fails closed when a migration database is not configured', async () => {
+      vi.mocked(ConnectorManager.getSourceConfig).mockReturnValue({
+        id: 'awaken_pro_prod',
+        type: 'mysql',
+      } as any);
       mockGetActiveWriteLease.mockResolvedValue({
         source_id: 'awaken_pro_prod',
         operations: ['migration'],
@@ -448,13 +452,85 @@ DEALLOCATE PREPARE stmt;
       const result = await handler({ sql: migrationSql }, null);
       const parsedResult = parseToolResponse(result);
 
-      expect(parsedResult.code).toBe('MIGRATION_DATABASE_MISMATCH');
+      expect(parsedResult.code).toBe('MIGRATION_DATABASE_NOT_CONFIGURED');
       expect(parsedResult.details).toMatchObject({
         source_id: 'awaken_pro_prod',
-        configured_database: 'awaken_pro_prod',
-        runtime_database: 'awaken_payment',
       });
       expect(mockConnector.executeSQL).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('hybrid DML and migration mode', () => {
+    const migrationSql = 'CREATE TABLE IF NOT EXISTS `pro_user_account` (`id` bigint NOT NULL) ENGINE=InnoDB';
+
+    beforeEach(() => {
+      mockConnector = createMockConnector('mysql', 'cognitive');
+      mockGetCurrentConnector.mockReturnValue(mockConnector);
+      vi.mocked(ConnectorManager.getSourceConfig).mockReturnValue({
+        id: 'cognitive',
+        type: 'mysql',
+        database: 'awaken_payment',
+      } as any);
+      mockGetToolRegistry.mockReturnValue({
+        getBuiltinToolConfig: vi.fn().mockReturnValue({
+          readonly: true,
+          temporary_write_mode: 'dml_and_migration',
+          temporary_migration_database: 'awaken_pro_prod',
+        }),
+      } as any);
+    });
+
+    it('asks for the existing cognitive command and reports the fixed migration target', async () => {
+      const handler = createExecuteSqlToolHandler('cognitive');
+      const result = await handler({ sql: migrationSql }, null);
+      const parsedResult = parseToolResponse(result);
+
+      expect(parsedResult.code).toBe('WRITE_ACCESS_REQUIRED');
+      expect(parsedResult.details).toMatchObject({
+        command: 'dbhub enable cognitive',
+        migration_database: 'awaken_pro_prod',
+      });
+      expect(mockConnector.executeSQL).not.toHaveBeenCalled();
+    });
+
+    it('executes migration SQL unchanged in the configured migration database', async () => {
+      mockGetActiveWriteLease.mockResolvedValue({
+        source_id: 'cognitive',
+        operations: ['insert', 'update', 'delete', 'migration'],
+        enabled_at: '2026-07-13T12:00:00.000Z',
+        expires_at: '2026-07-13T12:10:00.000Z',
+      });
+      vi.mocked(mockConnector.executeSQL).mockResolvedValue({ rows: [], rowCount: 0 });
+
+      const handler = createExecuteSqlToolHandler('cognitive');
+      const result = await handler({ sql: migrationSql }, null);
+
+      expect(parseToolResponse(result).success).toBe(true);
+      expect(mockConnector.executeSQL).toHaveBeenCalledWith(migrationSql, {
+        readonly: false,
+        maxRows: undefined,
+        database: 'awaken_pro_prod',
+      });
+    });
+
+    it('keeps ordinary DML on the cognitive default database', async () => {
+      mockGetActiveWriteLease.mockResolvedValue({
+        source_id: 'cognitive',
+        operations: ['insert', 'update', 'delete', 'migration'],
+        enabled_at: '2026-07-13T12:00:00.000Z',
+        expires_at: '2026-07-13T12:10:00.000Z',
+      });
+      vi.mocked(mockConnector.executeSQL).mockResolvedValue({ rows: [], rowCount: 1 });
+
+      const sql = "UPDATE payment_order SET status = 'paid' WHERE id = 1";
+      const handler = createExecuteSqlToolHandler('cognitive');
+      const result = await handler({ sql }, null);
+
+      expect(parseToolResponse(result).success).toBe(true);
+      expect(mockConnector.executeSQL).toHaveBeenCalledWith(sql, {
+        readonly: false,
+        maxRows: undefined,
+      });
     });
   });
 

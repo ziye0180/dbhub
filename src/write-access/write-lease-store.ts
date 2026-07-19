@@ -58,10 +58,14 @@ const writeLeaseSchema = z
     const isCompleteDml =
       lease.operations.length === WRITE_OPERATIONS.length &&
       WRITE_OPERATIONS.every((operation) => lease.operations.includes(operation));
-    if (!isMigrationOnly && !isCompleteDml) {
+    const isCompleteHybrid =
+      lease.operations.length === WRITE_PERMISSIONS.length &&
+      WRITE_PERMISSIONS.every((operation) => lease.operations.includes(operation));
+    if (!isMigrationOnly && !isCompleteDml && !isCompleteHybrid) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "Write lease must contain either the complete DML profile or migration only",
+        message:
+          "Write lease must contain the complete DML profile, migration only, or the complete hybrid profile",
         path: ["operations"],
       });
     }

@@ -29,6 +29,7 @@ export interface Tool {
   readonly?: boolean;
   max_rows?: number;
   temporary_write_mode?: TemporaryWriteMode;
+  temporary_migration_database?: string;
 }
 
 /**
@@ -129,6 +130,10 @@ export function getExecuteSqlMetadata(sourceId: string): ToolMetadata {
       toolConfig && "temporary_write_mode" in toolConfig
         ? (toolConfig.temporary_write_mode ?? "dml")
         : "dml",
+    temporaryMigrationDatabase:
+      toolConfig && "temporary_migration_database" in toolConfig
+        ? toolConfig.temporary_migration_database
+        : undefined,
   };
 
   // Determine tool name based on single vs multi-source configuration
@@ -148,7 +153,9 @@ export function getExecuteSqlMetadata(sourceId: string): ToolMetadata {
   const defaultDatabaseNote = sourceConfig.database
     ? executeOptions.temporaryWriteMode === "migration"
       ? ` Default database: '${sourceConfig.database}'. Temporary migration writes are restricted to unqualified targets in this database.`
-      : ` Default database: '${sourceConfig.database}'. Other accessible databases may exist; use search_objects with object_type='schema' to discover them and qualify cross-database SQL as database.table.`
+      : executeOptions.temporaryWriteMode === "dml_and_migration"
+        ? ` Default database: '${sourceConfig.database}'. Temporary DML remains in this database; validated migration writes run in '${executeOptions.temporaryMigrationDatabase}'.`
+        : ` Default database: '${sourceConfig.database}'. Other accessible databases may exist; use search_objects with object_type='schema' to discover them and qualify cross-database SQL as database.table.`
     : "";
   const temporaryWriteNote = executeOptions.readonly
     ? ` Temporary ${executeOptions.temporaryWriteMode} access requires the user to run this command on the DBHub host: ${formatEnableWriteCommand(sourceId)}; never run that authorization command on the user's behalf.`
@@ -183,13 +190,19 @@ export function getExecuteSqlMetadata(sourceId: string): ToolMetadata {
  * @param sourceId - The source ID to get tool metadata for
  * @returns Tool name, description, and annotations
  */
-export function getSearchObjectsMetadata(sourceId: string): { name: string; description: string; title: string } {
+export function getSearchObjectsMetadata(sourceId: string): {
+  name: string;
+  description: string;
+  title: string;
+} {
   const sourceIds = ConnectorManager.getAvailableSourceIds();
   const sourceConfig = ConnectorManager.getSourceConfig(sourceId)!;
   const dbType = sourceConfig.type;
   const isSingleSource = sourceIds.length === 1;
 
-  const toolName = isSingleSource ? "search_objects" : `search_objects_${normalizeSourceId(sourceId)}`;
+  const toolName = isSingleSource
+    ? "search_objects"
+    : `search_objects_${normalizeSourceId(sourceId)}`;
   const title = isSingleSource
     ? `Search Database Objects (${dbType})`
     : `Search Database Objects on ${sourceId} (${dbType})`;
@@ -237,11 +250,15 @@ function buildExecuteSqlTool(sourceId: string, toolConfig?: ToolConfig): Tool {
 
   // Extract readonly and max_rows from toolConfig
   // ToolConfig is a union type, but ExecuteSqlToolConfig and CustomToolConfig both have these fields
-  const readonly = toolConfig && 'readonly' in toolConfig ? toolConfig.readonly : undefined;
-  const max_rows = toolConfig && 'max_rows' in toolConfig ? toolConfig.max_rows : undefined;
+  const readonly = toolConfig && "readonly" in toolConfig ? toolConfig.readonly : undefined;
+  const max_rows = toolConfig && "max_rows" in toolConfig ? toolConfig.max_rows : undefined;
   const temporary_write_mode =
-    toolConfig && 'temporary_write_mode' in toolConfig
+    toolConfig && "temporary_write_mode" in toolConfig
       ? toolConfig.temporary_write_mode
+      : undefined;
+  const temporary_migration_database =
+    toolConfig && "temporary_migration_database" in toolConfig
+      ? toolConfig.temporary_migration_database
       : undefined;
 
   return {
@@ -251,6 +268,7 @@ function buildExecuteSqlTool(sourceId: string, toolConfig?: ToolConfig): Tool {
     readonly,
     max_rows,
     temporary_write_mode,
+    temporary_migration_database,
   };
 }
 
@@ -268,7 +286,8 @@ function buildSearchObjectsTool(sourceId: string): Tool {
         name: "object_type",
         type: "string",
         required: true,
-        description: "Object type to search: schema, table, view, column, procedure, function, index",
+        description:
+          "Object type to search: schema, table, view, column, procedure, function, index",
       },
       {
         name: "pattern",

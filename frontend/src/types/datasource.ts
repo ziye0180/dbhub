@@ -21,7 +21,8 @@ export interface Tool {
   statement?: string;
   readonly?: boolean;
   max_rows?: number;
-  temporary_write_mode?: 'dml' | 'migration';
+  temporary_write_mode?: 'dml' | 'migration' | 'dml_and_migration';
+  temporary_migration_database?: string;
 }
 
 export interface DataSource {

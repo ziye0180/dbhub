@@ -187,9 +187,13 @@ components:
           example: 1000
         temporary_write_mode:
           type: string
-          enum: [dml, migration]
+          enum: [dml, migration, dml_and_migration]
           description: Capability issued by the host-side temporary write lease for execute_sql
           example: migration
+        temporary_migration_database:
+          type: string
+          description: Fixed database used only for validated migration operations on a hybrid execute_sql source
+          example: app_schema
 
     ToolParameter:
       type: object

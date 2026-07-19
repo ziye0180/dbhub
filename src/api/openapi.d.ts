@@ -146,7 +146,12 @@ export interface components {
              * @example migration
              * @enum {string}
              */
-            temporary_write_mode?: "dml" | "migration";
+            temporary_write_mode?: "dml" | "migration" | "dml_and_migration";
+            /**
+             * @description Fixed database used only for validated migration operations on a hybrid execute_sql source
+             * @example app_schema
+             */
+            temporary_migration_database?: string;
         };
         /** @description Parameter definition for a tool */
         ToolParameter: {

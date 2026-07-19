@@ -229,7 +229,7 @@ dsn = "postgres://postgres:postgres@localhost:5432/myapp"
 # readonly = true
 # max_rows = 1000
 
-# Opt-in forward migration source. The host command remains:
+# Opt-in forward migration source. The host command remains unchanged:
 # dbhub enable app_migrations
 # [[sources]]
 # id = "app_migrations"
@@ -244,6 +244,16 @@ dsn = "postgres://postgres:postgres@localhost:5432/myapp"
 # source = "app_migrations"
 # readonly = true
 # temporary_write_mode = "migration"
+#
+# To keep DML on the source's default database while sending only validated
+# migration SQL to a second database, use one hybrid lease and the same command:
+# dbhub enable app
+# [[tools]]
+# name = "execute_sql"
+# source = "app"
+# readonly = true
+# temporary_write_mode = "dml_and_migration"
+# temporary_migration_database = "app_schema"
 
 # [[tools]]
 # name = "search_objects"

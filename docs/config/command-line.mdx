@@ -48,8 +48,9 @@ second MCP server.
 
 The command syntax is identical for every source. The source's `execute_sql`
 configuration decides which capability is persisted in the lease: omitted or
-`dml` permits guarded INSERT/UPDATE/DELETE, while `migration` permits only the
-forward migration grammar documented under `temporary_write_mode`.
+`dml` permits guarded INSERT/UPDATE/DELETE, `migration` permits only the
+forward migration grammar, and `dml_and_migration` combines both profiles while
+routing migration operations to the fixed `temporary_migration_database`.
 
 For Docker Compose, create the host directory before starting DBHub and mount
 it read-only into the server container:

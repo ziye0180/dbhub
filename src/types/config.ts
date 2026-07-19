@@ -80,7 +80,7 @@ export interface ParameterConfig {
  * Built-in tool configuration for execute_sql
  */
 /** Capability issued by the unchanged host-side enable command. */
-export type TemporaryWriteMode = "dml" | "migration";
+export type TemporaryWriteMode = "dml" | "migration" | "dml_and_migration";
 
 export interface ExecuteSqlToolConfig {
   name: "execute_sql"; // Must match BUILTIN_TOOL_EXECUTE_SQL from builtin-tools.ts
@@ -89,6 +89,8 @@ export interface ExecuteSqlToolConfig {
   max_rows?: number;
   /** Capability issued by `dbhub enable <source>`; defaults to DML-only. */
   temporary_write_mode?: TemporaryWriteMode;
+  /** Fixed database used only for migration operations on a hybrid source. */
+  temporary_migration_database?: string;
 }
 
 /**

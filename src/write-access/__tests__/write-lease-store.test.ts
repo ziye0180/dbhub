@@ -41,6 +41,19 @@ describe("WriteLeaseStore", () => {
     expect(lease.operations).toEqual(["migration"]);
   });
 
+  it("records the complete hybrid DML and migration profile", async () => {
+    const now = new Date("2026-07-13T12:00:00.000Z");
+
+    const lease = await store.enable(
+      "cognitive",
+      DEFAULT_WRITE_LEASE_TTL_MS,
+      now,
+      ["insert", "update", "delete", "migration"]
+    );
+
+    expect(lease.operations).toEqual(["insert", "update", "delete", "migration"]);
+  });
+
   it("keeps leases isolated by source", async () => {
     const now = new Date("2026-07-13T12:00:00.000Z");
     await store.enable("awakening", DEFAULT_WRITE_LEASE_TTL_MS, now);
@@ -115,7 +128,7 @@ describe("WriteLeaseStore", () => {
     );
   });
 
-  it("fails closed when a lease mixes DML and migration capabilities", async () => {
+  it("fails closed when a hybrid lease omits a DML capability", async () => {
     await fs.writeFile(
       store.filePath,
       JSON.stringify({
@@ -123,7 +136,7 @@ describe("WriteLeaseStore", () => {
         leases: [
           {
             source_id: "awakening",
-            operations: ["insert", "update", "delete", "migration"],
+            operations: ["insert", "update", "migration"],
             enabled_at: "2026-07-13T12:00:00.000Z",
             expires_at: "2026-07-13T12:10:00.000Z",
           },

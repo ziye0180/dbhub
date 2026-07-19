@@ -14,9 +14,13 @@ import {
 import { SafeURL } from "../../utils/safe-url.js";
 import { obfuscateDSNPassword } from "../../utils/dsn-obfuscate.js";
 import { SQLRowLimiter } from "../../utils/sql-row-limiter.js";
-import { parseQueryResults, extractAffectedRows } from "../../utils/multi-statement-result-parser.js";
+import {
+  parseQueryResults,
+  extractAffectedRows,
+} from "../../utils/multi-statement-result-parser.js";
 import { splitSQLStatements } from "../../utils/sql-parser.js";
 import { quoteIdentifier } from "../../utils/identifier-quoter.js";
+import { executeInDatabaseContext } from "../database-context.js";
 
 /**
  * MySQL DSN Parser
@@ -50,7 +54,7 @@ class MySQLDSNParser implements DSNParser {
       const config: mysql.ConnectionOptions = {
         host: url.hostname,
         port: url.port ? parseInt(url.port) : 3306,
-        database: url.pathname ? url.pathname.substring(1) : '', // Remove leading '/' if exists
+        database: url.pathname ? url.pathname.substring(1) : "", // Remove leading '/' if exists
         user: url.username,
         password: url.password,
         multipleStatements: true, // Enable native multi-statement support
@@ -104,7 +108,7 @@ class MySQLDSNParser implements DSNParser {
         config.authPlugins = {
           mysql_clear_password: () => () => {
             return Buffer.from(url.password + "\0");
-          }
+          },
         };
         // AWS IAM authentication requires SSL, enable if not already configured
         if (config.ssl === undefined) {
@@ -126,7 +130,7 @@ class MySQLDSNParser implements DSNParser {
 
   isValidDSN(dsn: string): boolean {
     try {
-      return dsn.startsWith('mysql://');
+      return dsn.startsWith("mysql://");
     } catch (error) {
       return false;
     }
@@ -142,6 +146,7 @@ export class MySQLConnector implements Connector {
   dsnParser = new MySQLDSNParser();
 
   private pool: mysql.Pool | null = null;
+  private defaultDatabase: string | null = null;
   // Source ID is set by ConnectorManager after cloning
   private sourceId: string = "default";
   private queryTimeoutMs?: number;
@@ -157,6 +162,7 @@ export class MySQLConnector implements Connector {
   async connect(dsn: string, initScript?: string, config?: ConnectorConfig): Promise<void> {
     try {
       const connectionOptions = await this.dsnParser.parse(dsn, config);
+      this.defaultDatabase = connectionOptions.database || null;
       this.pool = mysql.createPool(connectionOptions);
 
       // Store query timeout for per-query application
@@ -176,6 +182,7 @@ export class MySQLConnector implements Connector {
     if (this.pool) {
       await this.pool.end();
       this.pool = null;
+      this.defaultDatabase = null;
     }
   }
 
@@ -436,7 +443,10 @@ export class MySQLConnector implements Connector {
     }
   }
 
-  async getStoredProcedures(schema?: string, routineType?: "procedure" | "function"): Promise<string[]> {
+  async getStoredProcedures(
+    schema?: string,
+    routineType?: "procedure" | "function"
+  ): Promise<string[]> {
     if (!this.pool) {
       throw new Error("Not connected to database");
     }
@@ -627,78 +637,80 @@ export class MySQLConnector implements Connector {
     // Get a dedicated connection from the pool to ensure session consistency
     // This is critical for session-specific features like LAST_INSERT_ID()
     const conn = await this.pool.getConnection();
-    try {
-      // Engine-level read-only backstop: run the batch inside a READ ONLY
-      // transaction so MySQL rejects DML writes (INSERT/UPDATE/DELETE/REPLACE)
-      // that the keyword classifier missed (e.g. function-based writes). Note this
-      // does NOT stop DDL: statements like DROP/CREATE perform an implicit COMMIT
-      // that ends the read-only transaction first, so DDL escapes. Stacked-DDL
-      // payloads (e.g. `SELECT 1--1;DROP TABLE t`) are instead rejected upstream by
-      // the read-only classifier, which now splits `--`-hidden statements (see
-      // scanSingleLineCommentMySQL in sql-parser.ts).
-      if (options.readonly) {
-        await conn.query("START TRANSACTION READ ONLY");
-      }
-
-      // Apply maxRows limit to SELECT queries if specified
-      let processedSQL = sql;
-      if (options.maxRows) {
-        // Handle multi-statement SQL by processing each statement individually
-        const statements = splitSQLStatements(sql, "mysql");
-
-        const processedStatements = statements.map(statement =>
-          SQLRowLimiter.applyMaxRows(statement, options.maxRows)
-        );
-
-        processedSQL = processedStatements.join('; ');
-        if (sql.trim().endsWith(';')) {
-          processedSQL += ';';
+    return executeInDatabaseContext(conn, this.defaultDatabase, options.database, async () => {
+      try {
+        // Engine-level read-only backstop: run the batch inside a READ ONLY
+        // transaction so MySQL rejects DML writes (INSERT/UPDATE/DELETE/REPLACE)
+        // that the keyword classifier missed (e.g. function-based writes). Note this
+        // does NOT stop DDL: statements like DROP/CREATE perform an implicit COMMIT
+        // that ends the read-only transaction first, so DDL escapes. Stacked-DDL
+        // payloads (e.g. `SELECT 1--1;DROP TABLE t`) are instead rejected upstream by
+        // the read-only classifier, which now splits `--`-hidden statements (see
+        // scanSingleLineCommentMySQL in sql-parser.ts).
+        if (options.readonly) {
+          await conn.query("START TRANSACTION READ ONLY");
         }
-      }
 
-      // Use dedicated connection with multipleStatements: true support
-      // Pass parameters if provided, with optional query timeout
-      let results: any;
-      if (parameters && parameters.length > 0) {
-        try {
-          results = await conn.query({ sql: processedSQL, timeout: this.queryTimeoutMs }, parameters);
-        } catch (error) {
-          console.error(`[MySQL executeSQL] ERROR: ${(error as Error).message}`);
-          console.error(`[MySQL executeSQL] SQL: ${processedSQL}`);
-          console.error(`[MySQL executeSQL] Parameters: ${JSON.stringify(parameters)}`);
-          throw error;
+        // Apply maxRows limit to SELECT queries if specified
+        let processedSQL = sql;
+        if (options.maxRows) {
+          // Handle multi-statement SQL by processing each statement individually
+          const statements = splitSQLStatements(sql, "mysql");
+
+          const processedStatements = statements.map((statement) =>
+            SQLRowLimiter.applyMaxRows(statement, options.maxRows)
+          );
+
+          processedSQL = processedStatements.join("; ");
+          if (sql.trim().endsWith(";")) {
+            processedSQL += ";";
+          }
         }
-      } else {
-        results = await conn.query({ sql: processedSQL, timeout: this.queryTimeoutMs });
-      }
 
-      // MySQL2 returns results in format [rows, fields]
-      // Extract the first element which contains the actual row data
-      const [firstResult] = results;
-
-      // Parse results using shared utility that handles both single and multi-statement queries
-      const rows = parseQueryResults(firstResult);
-      const rowCount = extractAffectedRows(firstResult);
-
-      if (options.readonly) {
-        await conn.query("COMMIT");
-      }
-      return { rows, rowCount };
-    } catch (error) {
-      if (options.readonly) {
-        // Best-effort rollback so the connection returns to the pool clean.
-        try {
-          await conn.query("ROLLBACK");
-        } catch {
-          // ignore rollback failure; the original error is more useful
+        // Use dedicated connection with multipleStatements: true support
+        // Pass parameters if provided, with optional query timeout
+        let results: any;
+        if (parameters && parameters.length > 0) {
+          try {
+            results = await conn.query(
+              { sql: processedSQL, timeout: this.queryTimeoutMs },
+              parameters
+            );
+          } catch (error) {
+            console.error(`[MySQL executeSQL] ERROR: ${(error as Error).message}`);
+            console.error(`[MySQL executeSQL] SQL: ${processedSQL}`);
+            console.error(`[MySQL executeSQL] Parameters: ${JSON.stringify(parameters)}`);
+            throw error;
+          }
+        } else {
+          results = await conn.query({ sql: processedSQL, timeout: this.queryTimeoutMs });
         }
+
+        // MySQL2 returns results in format [rows, fields]
+        // Extract the first element which contains the actual row data
+        const [firstResult] = results;
+
+        // Parse results using shared utility that handles both single and multi-statement queries
+        const rows = parseQueryResults(firstResult);
+        const rowCount = extractAffectedRows(firstResult);
+
+        if (options.readonly) {
+          await conn.query("COMMIT");
+        }
+        return { rows, rowCount };
+      } catch (error) {
+        if (options.readonly) {
+          // Best-effort rollback so the connection returns to the pool clean.
+          try {
+            await conn.query("ROLLBACK");
+          } catch {
+            // ignore rollback failure; the original error is more useful
+          }
+        }
+        console.error("Error executing query:", error);
+        throw error;
       }
-      console.error("Error executing query:", error);
-      throw error;
-    } finally {
-      // Always release the connection back to the pool
-      conn.release();
-    }
+    });
   }
 }
 

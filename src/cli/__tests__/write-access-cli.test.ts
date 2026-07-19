@@ -65,6 +65,41 @@ describe("write-access CLI", () => {
     expect(output.join("\n")).toContain("MIGRATION");
   });
 
+  it("uses the unchanged cognitive command to issue a hybrid lease", async () => {
+    const enable = vi.fn().mockResolvedValue({
+      source_id: "cognitive",
+      operations: ["insert", "update", "delete", "migration"],
+      enabled_at: "2026-07-13T12:00:00.000Z",
+      expires_at: "2026-07-13T12:10:00.000Z",
+    });
+    const output: string[] = [];
+
+    await executeWriteAccessCommand(["enable", "cognitive"], {
+      store: { enable } as unknown as WriteLeaseStore,
+      sources: new Map([
+        [
+          "cognitive",
+          {
+            type: "mysql",
+            executeSqlEnabled: true,
+            readonly: true,
+            temporaryWriteMode: "dml_and_migration",
+          },
+        ],
+      ]),
+      now: () => new Date("2026-07-13T12:00:00.000Z"),
+      writeOutput: (message) => output.push(message),
+    });
+
+    expect(enable).toHaveBeenCalledWith(
+      "cognitive",
+      600_000,
+      expect.any(Date),
+      ["insert", "update", "delete", "migration"]
+    );
+    expect(output.join("\n")).toContain("INSERT, UPDATE, DELETE, MIGRATION");
+  });
+
   it("rejects an unknown source", async () => {
     await expect(
       executeWriteAccessCommand(["enable", "missing"], {

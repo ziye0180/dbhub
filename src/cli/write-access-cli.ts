@@ -122,7 +122,12 @@ async function showStatus(
 }
 
 function getPermissions(mode: TemporaryWriteMode): readonly WritePermission[] {
-  return mode === "migration" ? [MIGRATION_WRITE_OPERATION] : WRITE_OPERATIONS;
+  if (mode === "migration") {
+    return [MIGRATION_WRITE_OPERATION];
+  }
+  return mode === "dml_and_migration"
+    ? [...WRITE_OPERATIONS, MIGRATION_WRITE_OPERATION]
+    : WRITE_OPERATIONS;
 }
 
 function formatPermissions(permissions: readonly WritePermission[]): string {
@@ -133,8 +138,11 @@ function formatPermissions(permissions: readonly WritePermission[]): string {
     .join(", ");
 }
 
-function formatPermissionMode(permissions: readonly WritePermission[]): TemporaryWriteMode {
-  return permissions.includes(MIGRATION_WRITE_OPERATION) ? "migration" : "dml";
+function formatPermissionMode(permissions: readonly WritePermission[]): string {
+  if (!permissions.includes(MIGRATION_WRITE_OPERATION)) {
+    return "dml";
+  }
+  return permissions.length === 1 ? "migration" : "dml+migration";
 }
 
 function requireSourceId(args: readonly string[], command: "enable" | "disable"): string {

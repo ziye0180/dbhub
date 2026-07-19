@@ -68,6 +68,8 @@ export interface ExecuteOptions {
    * Note: SDK-level readonly enforcement is set via ConnectorConfig.readonly
    */
   readonly?: boolean;
+  /** Trusted configuration-defined database context for this execution only. */
+  database?: string;
 }
 
 /**

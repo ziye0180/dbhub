@@ -67,6 +67,24 @@ export function classifySqlAccess(
       : migrationDecision;
   }
 
+  if (temporaryWriteMode === "dml_and_migration") {
+    const dmlDecision = classifyDmlAccess(statements, connectorType);
+    if (
+      dmlDecision.kind === "write" ||
+      (dmlDecision.kind === "denied" && dmlDecision.reason === "where_required")
+    ) {
+      return dmlDecision;
+    }
+    const migrationDecision = classifyMigrationSql(sql, connectorType);
+    return migrationDecision.kind === "migration"
+      ? { kind: "write", operation: "migration" }
+      : migrationDecision;
+  }
+
+  return classifyDmlAccess(statements, connectorType);
+}
+
+function classifyDmlAccess(statements: string[], connectorType: ConnectorType): SqlAccessDecision {
   if (statements.length !== 1) {
     return { kind: "denied", reason: "multiple_write_statements" };
   }
@@ -95,7 +113,6 @@ export function classifySqlAccess(
       return { kind: "denied", reason: "where_required" };
     }
   }
-
   return { kind: "write", operation };
 }
 

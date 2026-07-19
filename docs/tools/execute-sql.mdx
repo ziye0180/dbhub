@@ -177,6 +177,14 @@ MySQL/MariaDB and must define a default database. Its lease allows forward
 CREATE TABLE, ALTER TABLE ADD, CREATE INDEX, and closed guarded
 SET/PREPARE/EXECUTE/DEALLOCATE batches. It rejects ordinary DML, `USE`,
 database-qualified write targets, DROP/TRUNCATE, and arbitrary prepared SQL.
+
+`temporary_write_mode = "dml_and_migration"` keeps the same
+`dbhub enable <source>` command and issues one lease containing both complete
+profiles. Ordinary DML runs in the source default database. Only SQL accepted by
+the migration classifier runs in the fixed `temporary_migration_database`; the
+target cannot be supplied through MCP input, and the pooled connection is
+restored to its default database before reuse.
+
 The issued capability is stored in the lease, so a later configuration change
 cannot broaden an already active lease. Expired leases are treated as read-only
 without requiring a cleanup command.

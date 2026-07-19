@@ -357,6 +357,68 @@ temporary_write_mode = "migration"
       });
     });
 
+    it('should accept hybrid DML and migration mode with a fixed migration database', () => {
+      const tomlContent = `
+[[sources]]
+id = "cognitive"
+type = "mysql"
+host = "localhost"
+database = "awaken_payment"
+user = "dbhub"
+password = "secret"
+
+[[tools]]
+name = "execute_sql"
+source = "cognitive"
+readonly = true
+temporary_write_mode = "dml_and_migration"
+temporary_migration_database = "awaken_pro_prod"
+`;
+      fs.writeFileSync(path.join(tempDir, 'dbhub.toml'), tomlContent);
+
+      expect(loadTomlConfig()?.tools?.[0]).toMatchObject({
+        temporary_write_mode: 'dml_and_migration',
+        temporary_migration_database: 'awaken_pro_prod',
+      });
+    });
+
+    it.each([
+      [
+        'missing migration database',
+        'temporary_write_mode = "dml_and_migration"',
+        'requires temporary_migration_database',
+      ],
+      [
+        'unsafe migration database',
+        'temporary_write_mode = "dml_and_migration"\ntemporary_migration_database = "other.db"',
+        'invalid temporary_migration_database',
+      ],
+      [
+        'migration database on DML mode',
+        'temporary_write_mode = "dml"\ntemporary_migration_database = "awaken_pro_prod"',
+        'temporary_migration_database requires migration capability',
+      ],
+    ])('should reject hybrid mode with %s', (_, toolFields, error) => {
+      const tomlContent = `
+[[sources]]
+id = "cognitive"
+type = "mysql"
+host = "localhost"
+database = "awaken_payment"
+user = "dbhub"
+password = "secret"
+
+[[tools]]
+name = "execute_sql"
+source = "cognitive"
+readonly = true
+${toolFields}
+`;
+      fs.writeFileSync(path.join(tempDir, 'dbhub.toml'), tomlContent);
+
+      expect(() => loadTomlConfig()).toThrow(error);
+    });
+
     it.each([
       [
         'invalid mode',
@@ -385,6 +447,13 @@ temporary_write_mode = "migration"
         'database = "app"',
         'readonly = true\ntemporary_write_mode = "migration"',
         'supports only MySQL and MariaDB',
+      ],
+      [
+        'migration database outside hybrid mode',
+        'mysql',
+        'database = "app"',
+        'readonly = true\ntemporary_write_mode = "migration"\ntemporary_migration_database = "app_schema"',
+        'temporary_migration_database is only valid for dml_and_migration mode',
       ],
     ])('should reject migration mode with %s', (_, type, database, toolFields, error) => {
       const tomlContent = `

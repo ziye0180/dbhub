@@ -123,4 +123,21 @@ CREATE UNIQUE INDEX \`uk_pro_upload_intent_env_no\` ON \`pro_upload_intent\` (\`
       });
     });
   });
+
+  describe("hybrid DML and migration mode", () => {
+    it("classifies ordinary DML without weakening its guards", () => {
+      expect(
+        classifySqlAccess("UPDATE users SET name = 'x' WHERE id = 1", "mysql", "dml_and_migration")
+      ).toEqual({ kind: "write", operation: "update" });
+      expect(
+        classifySqlAccess("DELETE FROM users", "mysql", "dml_and_migration")
+      ).toEqual({ kind: "denied", reason: "where_required" });
+    });
+
+    it("classifies approved forward DDL as migration", () => {
+      expect(
+        classifySqlAccess("CREATE TABLE users (id bigint) ENGINE=InnoDB", "mysql", "dml_and_migration")
+      ).toEqual({ kind: "write", operation: "migration" });
+    });
+  });
 });

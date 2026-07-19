@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { ConnectorManager } from "../connectors/manager.js";
-import type { Connector } from "../connectors/interface.js";
+import type { ExecuteOptions } from "../connectors/interface.js";
+import type { TemporaryWriteMode, ToolConfig } from "../types/config.js";
 import { createToolSuccessResponse, createToolErrorResponse } from "../utils/response-formatter.js";
 import { getToolRegistry } from "./registry.js";
 import { BUILTIN_TOOL_EXECUTE_SQL } from "./builtin-tools.js";
@@ -54,23 +55,28 @@ export function createExecuteSqlToolHandler(sourceId?: string) {
           : "dml";
       const authorizationSourceId = sourceId ?? actualSourceId;
       const accessDecision = classifySqlAccess(sql, connector.id, temporaryWriteMode);
+      const migrationDatabase =
+        accessDecision.kind === "write" && accessDecision.operation === "migration"
+          ? getMigrationDatabase(toolConfig, actualSourceId)
+          : undefined;
       if (
         configuredReadonly &&
-        temporaryWriteMode === "migration" &&
-        accessDecision.kind === "write"
+        accessDecision.kind === "write" &&
+        accessDecision.operation === "migration" &&
+        !migrationDatabase
       ) {
-        const databaseGuard = await verifyMigrationDatabase(connector, actualSourceId);
-        if (databaseGuard) {
-          success = false;
-          errorMessage = databaseGuard.errorMessage;
-          return databaseGuard.errorResponse;
-        }
+        errorMessage = `Migration database is not configured for source '${authorizationSourceId}'`;
+        success = false;
+        return createToolErrorResponse(errorMessage, "MIGRATION_DATABASE_NOT_CONFIGURED", {
+          source_id: authorizationSourceId,
+        });
       }
       const writeAuthorization = configuredReadonly
         ? await authorizeTemporaryWrite(
             accessDecision,
             temporaryWriteMode,
             authorizationSourceId,
+            migrationDatabase
           )
         : { effectiveReadonly: toolConfig?.readonly, lease: null };
 
@@ -81,9 +87,10 @@ export function createExecuteSqlToolHandler(sourceId?: string) {
       }
 
       // Execute the SQL (single or multiple statements) if validation passed
-      const executeOptions = {
+      const executeOptions: ExecuteOptions = {
         readonly: writeAuthorization.effectiveReadonly,
         maxRows: toolConfig?.max_rows,
+        ...(migrationDatabase ? { database: migrationDatabase } : {}),
       };
       result = await connector.executeSQL(sql, executeOptions);
 
@@ -114,7 +121,8 @@ export function createExecuteSqlToolHandler(sourceId?: string) {
       trackToolRequest(
         {
           sourceId: effectiveSourceId,
-          toolName: effectiveSourceId === "default" ? "execute_sql" : `execute_sql_${effectiveSourceId}`,
+          toolName:
+            effectiveSourceId === "default" ? "execute_sql" : `execute_sql_${effectiveSourceId}`,
           sql,
         },
         startTime,
@@ -136,35 +144,11 @@ interface DeniedWriteAccess {
   errorResponse: ReturnType<typeof createToolErrorResponse>;
 }
 
-async function verifyMigrationDatabase(
-  connector: Connector,
-  sourceId: string
-): Promise<DeniedWriteAccess | null> {
-  const configuredDatabase = ConnectorManager.getSourceConfig(sourceId)?.database;
-  const runtimeDatabase = connector.getDefaultSchema
-    ? await connector.getDefaultSchema()
-    : null;
-  if (configuredDatabase && runtimeDatabase === configuredDatabase) {
-    return null;
-  }
-
-  const errorMessage =
-    `Migration source '${sourceId}' database mismatch: configured ` +
-    `'${configuredDatabase ?? "<missing>"}', runtime '${runtimeDatabase ?? "<missing>"}'`;
-  return {
-    errorMessage,
-    errorResponse: createToolErrorResponse(errorMessage, "MIGRATION_DATABASE_MISMATCH", {
-      source_id: sourceId,
-      configured_database: configuredDatabase ?? null,
-      runtime_database: runtimeDatabase ?? null,
-    }),
-  };
-}
-
 async function authorizeTemporaryWrite(
   decision: SqlAccessDecision,
-  temporaryWriteMode: "dml" | "migration",
+  temporaryWriteMode: TemporaryWriteMode,
   sourceId: string,
+  migrationDatabase?: string
 ): Promise<AuthorizedWriteAccess | DeniedWriteAccess> {
   if (decision.kind === "read") {
     return { effectiveReadonly: true, lease: null };
@@ -210,6 +194,7 @@ async function authorizeTemporaryWrite(
         source_id: sourceId,
         operation: decision.operation,
         temporary_write_mode: temporaryWriteMode,
+        ...(migrationDatabase ? { migration_database: migrationDatabase } : {}),
         command,
         default_ttl: "10m",
       }),
@@ -230,7 +215,19 @@ async function authorizeTemporaryWrite(
   return { effectiveReadonly: false, lease };
 }
 
-function describeDeniedWrite(reason: Extract<SqlAccessDecision, { kind: "denied" }>["reason"]): string {
+function getMigrationDatabase(
+  toolConfig: ToolConfig | undefined,
+  sourceId: string
+): string | undefined {
+  if (toolConfig && "temporary_migration_database" in toolConfig) {
+    return toolConfig.temporary_migration_database;
+  }
+  return ConnectorManager.getSourceConfig(sourceId)?.database;
+}
+
+function describeDeniedWrite(
+  reason: Extract<SqlAccessDecision, { kind: "denied" }>["reason"]
+): string {
   switch (reason) {
     case "empty_sql":
       return "SQL must contain at least one executable statement";

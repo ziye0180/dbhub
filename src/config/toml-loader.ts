@@ -6,14 +6,22 @@ import type { SourceConfig, TomlConfig, ToolConfig } from "../types/config.js";
 import { parseCommandLineArgs } from "./env.js";
 import { parseConnectionInfoFromDSN, getDefaultPortForType } from "../utils/dsn-obfuscate.js";
 import { SafeURL } from "../utils/safe-url.js";
-import { BUILTIN_TOOLS, BUILTIN_TOOL_EXECUTE_SQL, BUILTIN_TOOL_SEARCH_OBJECTS } from "../tools/builtin-tools.js";
+import {
+  BUILTIN_TOOLS,
+  BUILTIN_TOOL_EXECUTE_SQL,
+  BUILTIN_TOOL_SEARCH_OBJECTS,
+} from "../tools/builtin-tools.js";
 import { validateTemporaryWriteConfig } from "./temporary-write-config.js";
 
 /**
  * Load and parse TOML configuration file
  * Returns the parsed sources array, tools array, and the source of the config file
  */
-export function loadTomlConfig(): { sources: SourceConfig[]; tools?: TomlConfig['tools']; source: string } | null {
+export function loadTomlConfig(): {
+  sources: SourceConfig[];
+  tools?: TomlConfig["tools"];
+  source: string;
+} | null {
   const configPath = resolveTomlConfigPath();
   if (!configPath) {
     return null;
@@ -45,9 +53,7 @@ export function loadTomlConfig(): { sources: SourceConfig[]; tools?: TomlConfig[
     };
   } catch (error) {
     if (error instanceof Error) {
-      throw new Error(
-        `Failed to load TOML configuration from ${configPath}: ${error.message}`
-      );
+      throw new Error(`Failed to load TOML configuration from ${configPath}: ${error.message}`);
     }
     throw error;
   }
@@ -64,9 +70,7 @@ export function resolveTomlConfigPath(): string | null {
   if (args.config) {
     const configPath = expandHomeDir(args.config);
     if (!fs.existsSync(configPath)) {
-      throw new Error(
-        `Configuration file specified by --config flag not found: ${configPath}`
-      );
+      throw new Error(`Configuration file specified by --config flag not found: ${configPath}`);
     }
     return configPath;
   }
@@ -151,9 +155,7 @@ function validateToolsConfig(
 
   for (const tool of tools) {
     if (!tool.name) {
-      throw new Error(
-        `Configuration file ${configPath}: all tools must have a 'name' field`
-      );
+      throw new Error(`Configuration file ${configPath}: all tools must have a 'name' field`);
     }
 
     if (!tool.source) {
@@ -187,6 +189,11 @@ function validateToolsConfig(
         `Configuration file ${configPath}: temporary_write_mode field is only valid for execute_sql`
       );
     }
+    if (!isExecuteSql && "temporary_migration_database" in tool) {
+      throw new Error(
+        `Configuration file ${configPath}: temporary_migration_database field is only valid for execute_sql`
+      );
+    }
 
     if (isBuiltin) {
       // Built-in tools should NOT have custom tool fields
@@ -201,10 +208,11 @@ function validateToolsConfig(
         !isExecuteSql &&
         (tool.readonly !== undefined ||
           tool.max_rows !== undefined ||
-          "temporary_write_mode" in tool)
+          "temporary_write_mode" in tool ||
+          "temporary_migration_database" in tool)
       ) {
         throw new Error(
-          `Configuration file ${configPath}: tool '${tool.name}' cannot have readonly, max_rows, or temporary_write_mode fields ` +
+          `Configuration file ${configPath}: tool '${tool.name}' cannot have readonly, max_rows, or temporary write fields ` +
             `(these are only valid for ${BUILTIN_TOOL_EXECUTE_SQL} tool)`
         );
       }
@@ -233,7 +241,10 @@ function validateToolsConfig(
       );
     }
 
-    if (isExecuteSql && "temporary_write_mode" in tool) {
+    if (
+      isExecuteSql &&
+      ("temporary_write_mode" in tool || "temporary_migration_database" in tool)
+    ) {
       validateTemporaryWriteConfig(tool, sources, configPath);
     }
   }
@@ -373,7 +384,11 @@ function validateDSNFieldConflicts(source: SourceConfig, configPath: string): vo
   }
 
   const dsnAuthentication = getRawDSNQueryParam(source.dsn!, "authentication");
-  if (source.authentication && dsnAuthentication !== null && dsnAuthentication !== source.authentication) {
+  if (
+    source.authentication &&
+    dsnAuthentication !== null &&
+    dsnAuthentication !== source.authentication
+  ) {
     conflict("authentication", source.authentication, dsnAuthentication);
   }
 
@@ -421,10 +436,7 @@ function validateSourceConfig(source: SourceConfig, configPath: string): void {
   }
 
   // Validate AWS IAM auth fields
-  if (
-    source.aws_iam_auth !== undefined &&
-    typeof source.aws_iam_auth !== "boolean"
-  ) {
+  if (source.aws_iam_auth !== undefined && typeof source.aws_iam_auth !== "boolean") {
     throw new Error(
       `Configuration file ${configPath}: source '${source.id}' has invalid aws_iam_auth. ` +
         `Must be a boolean (true or false).`
@@ -432,10 +444,7 @@ function validateSourceConfig(source: SourceConfig, configPath: string): void {
   }
 
   if (source.aws_region !== undefined) {
-    if (
-      typeof source.aws_region !== "string" ||
-      source.aws_region.trim().length === 0
-    ) {
+    if (typeof source.aws_region !== "string" || source.aws_region.trim().length === 0) {
       throw new Error(
         `Configuration file ${configPath}: source '${source.id}' has invalid aws_region. ` +
           `Must be a non-empty string (e.g., "eu-west-1").`
@@ -481,11 +490,7 @@ function validateSourceConfig(source: SourceConfig, configPath: string): void {
 
   // Validate SSH port if provided
   if (source.ssh_port !== undefined) {
-    if (
-      typeof source.ssh_port !== "number" ||
-      source.ssh_port <= 0 ||
-      source.ssh_port > 65535
-    ) {
+    if (typeof source.ssh_port !== "number" || source.ssh_port <= 0 || source.ssh_port > 65535) {
       throw new Error(
         `Configuration file ${configPath}: source '${source.id}' has invalid ssh_port. ` +
           `Must be between 1 and 65535.`
@@ -626,7 +631,6 @@ function validateSourceConfig(source: SourceConfig, configPath: string): void {
           `Must be a non-empty string of comma-separated schema names (e.g., "myschema,public").`
       );
     }
-
   }
 
   // Validate timezone (MySQL/MariaDB only)
@@ -705,10 +709,7 @@ function validateSourceConfig(source: SourceConfig, configPath: string): void {
 /**
  * Process source configurations (expand paths, populate fields from DSN)
  */
-function processSourceConfigs(
-  sources: SourceConfig[],
-  configPath: string
-): SourceConfig[] {
+function processSourceConfigs(sources: SourceConfig[], configPath: string): SourceConfig[] {
   return sources.map((source) => {
     const processed = { ...source };
 
@@ -790,7 +791,11 @@ export function interpolateEnvVars(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map((item) => interpolateEnvVars(item));
   }
-  if (value !== null && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype) {
+  if (
+    value !== null &&
+    typeof value === "object" &&
+    Object.getPrototypeOf(value) === Object.prototype
+  ) {
     const result: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(value)) {
       result[key] = interpolateEnvVars(val);
@@ -902,9 +907,7 @@ export function buildDSNFromSource(source: SourceConfig): string {
 
   // Validate required fields
   if (!source.type) {
-    throw new Error(
-      `Source '${source.id}': 'type' field is required when 'dsn' is not provided`
-    );
+    throw new Error(`Source '${source.id}': 'type' field is required when 'dsn' is not provided`);
   }
 
   // Redis sources don't have DSN — they go through RedisManager, not here.
@@ -918,9 +921,7 @@ export function buildDSNFromSource(source: SourceConfig): string {
   // Handle SQLite
   if (source.type === "sqlite") {
     if (!source.database) {
-      throw new Error(
-        `Source '${source.id}': 'database' field is required for SQLite`
-      );
+      throw new Error(`Source '${source.id}': 'database' field is required for SQLite`);
     }
     return `sqlite:///${source.database}`;
   }
@@ -928,11 +929,9 @@ export function buildDSNFromSource(source: SourceConfig): string {
   // For other databases, require host, user, database
   // Password is optional for Azure AD access token authentication and AWS IAM auth
   const isAwsIamPasswordless =
-    source.aws_iam_auth === true &&
-    ["postgres", "mysql", "mariadb"].includes(source.type);
+    source.aws_iam_auth === true && ["postgres", "mysql", "mariadb"].includes(source.type);
   const passwordRequired =
-    source.authentication !== "azure-active-directory-access-token" &&
-    !isAwsIamPasswordless;
+    source.authentication !== "azure-active-directory-access-token" && !isAwsIamPasswordless;
   if (!source.host || !source.user || !source.database) {
     throw new Error(
       `Source '${source.id}': missing required connection parameters. ` +

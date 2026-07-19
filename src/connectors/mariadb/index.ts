@@ -14,9 +14,13 @@ import {
 import { SafeURL } from "../../utils/safe-url.js";
 import { obfuscateDSNPassword } from "../../utils/dsn-obfuscate.js";
 import { SQLRowLimiter } from "../../utils/sql-row-limiter.js";
-import { parseQueryResults, extractAffectedRows } from "../../utils/multi-statement-result-parser.js";
+import {
+  parseQueryResults,
+  extractAffectedRows,
+} from "../../utils/multi-statement-result-parser.js";
 import { splitSQLStatements } from "../../utils/sql-parser.js";
 import { quoteIdentifier } from "../../utils/identifier-quoter.js";
+import { executeInDatabaseContext } from "../database-context.js";
 
 /**
  * MariaDB DSN Parser
@@ -47,19 +51,19 @@ class MariadbDSNParser implements DSNParser {
       const connectionConfig: mariadb.ConnectionConfig = {
         host: url.hostname,
         port: url.port ? parseInt(url.port) : 3306,
-        database: url.pathname ? url.pathname.substring(1) : '', // Remove leading '/' if exists
+        database: url.pathname ? url.pathname.substring(1) : "", // Remove leading '/' if exists
         user: url.username,
         password: url.password,
         multipleStatements: true, // Enable native multi-statement support
         ...(connectionTimeoutSeconds !== undefined && {
-          connectTimeout: connectionTimeoutSeconds * 1000
+          connectTimeout: connectionTimeoutSeconds * 1000,
         }),
         ...(queryTimeoutSeconds !== undefined && {
-          queryTimeout: queryTimeoutSeconds * 1000
+          queryTimeout: queryTimeoutSeconds * 1000,
         }),
         // Controls how the driver interprets DATETIME values ("Z", "local", or "±HH:MM").
         ...(config?.timezone !== undefined && {
-          timezone: config.timezone
+          timezone: config.timezone,
         }),
         // Connection character set (e.g. "utf8mb4") / collation (e.g.
         // "utf8mb4_general_ci"). The mariadb driver exposes both as distinct
@@ -113,7 +117,7 @@ class MariadbDSNParser implements DSNParser {
 
   isValidDSN(dsn: string): boolean {
     try {
-      return dsn.startsWith('mariadb://');
+      return dsn.startsWith("mariadb://");
     } catch (error) {
       return false;
     }
@@ -129,6 +133,7 @@ export class MariaDBConnector implements Connector {
   dsnParser = new MariadbDSNParser();
 
   private pool: mariadb.Pool | null = null;
+  private defaultDatabase: string | null = null;
   // Source ID is set by ConnectorManager after cloning
   private sourceId: string = "default";
 
@@ -143,6 +148,7 @@ export class MariaDBConnector implements Connector {
   async connect(dsn: string, initScript?: string, config?: ConnectorConfig): Promise<void> {
     try {
       const connectionConfig = await this.dsnParser.parse(dsn, config);
+      this.defaultDatabase = connectionConfig.database || null;
 
       this.pool = mariadb.createPool(connectionConfig);
 
@@ -158,6 +164,7 @@ export class MariaDBConnector implements Connector {
     if (this.pool) {
       await this.pool.end();
       this.pool = null;
+      this.defaultDatabase = null;
     }
   }
 
@@ -170,12 +177,12 @@ export class MariaDBConnector implements Connector {
       // In MariaDB, schemas are equivalent to databases. Exclude server-level
       // system databases so the list matches the user-facing schemas only
       // (parity with the PostgreSQL connector, which hides pg_catalog et al.).
-      const rows = await this.pool.query(`
+      const rows = (await this.pool.query(`
         SELECT SCHEMA_NAME
         FROM INFORMATION_SCHEMA.SCHEMATA
         WHERE SCHEMA_NAME NOT IN ('information_schema', 'performance_schema', 'mysql', 'sys')
         ORDER BY SCHEMA_NAME
-      `) as any[];
+      `)) as any[];
 
       return rows.map((row) => row.SCHEMA_NAME);
     } catch (error) {
@@ -198,7 +205,7 @@ export class MariaDBConnector implements Connector {
       const queryParams = schema ? [schema] : [];
 
       // Get all tables from the specified schema or current database (excludes views)
-      const rows = await this.pool.query(
+      const rows = (await this.pool.query(
         `
         SELECT TABLE_NAME
         FROM INFORMATION_SCHEMA.TABLES
@@ -207,7 +214,7 @@ export class MariaDBConnector implements Connector {
         ORDER BY TABLE_NAME
       `,
         queryParams
-      ) as any[];
+      )) as any[];
 
       return rows.map((row) => row.TABLE_NAME);
     } catch (error) {
@@ -225,7 +232,7 @@ export class MariaDBConnector implements Connector {
       const schemaClause = schema ? "WHERE TABLE_SCHEMA = ?" : "WHERE TABLE_SCHEMA = DATABASE()";
       const queryParams = schema ? [schema] : [];
 
-      const rows = await this.pool.query(
+      const rows = (await this.pool.query(
         `
         SELECT TABLE_NAME
         FROM INFORMATION_SCHEMA.TABLES
@@ -234,7 +241,7 @@ export class MariaDBConnector implements Connector {
         ORDER BY TABLE_NAME
       `,
         queryParams
-      ) as any[];
+      )) as any[];
 
       return rows.map((row) => row.TABLE_NAME);
     } catch (error) {
@@ -255,7 +262,7 @@ export class MariaDBConnector implements Connector {
 
       const queryParams = schema ? [schema, tableName] : [tableName];
 
-      const rows = await this.pool.query(
+      const rows = (await this.pool.query(
         `
         SELECT COUNT(*) AS COUNT
         FROM INFORMATION_SCHEMA.TABLES 
@@ -263,7 +270,7 @@ export class MariaDBConnector implements Connector {
         AND TABLE_NAME = ?
       `,
         queryParams
-      ) as any[];
+      )) as any[];
 
       return rows[0].COUNT > 0;
     } catch (error) {
@@ -284,7 +291,7 @@ export class MariaDBConnector implements Connector {
       const queryParams = schema ? [schema, tableName] : [tableName];
 
       // Get information about indexes
-      const indexRows = await this.pool.query(
+      const indexRows = (await this.pool.query(
         `
         SELECT 
           INDEX_NAME,
@@ -301,7 +308,7 @@ export class MariaDBConnector implements Connector {
           SEQ_IN_INDEX
       `,
         queryParams
-      ) as any[];
+      )) as any[];
 
       // Process the results to group columns by index
       const indexMap = new Map<
@@ -363,7 +370,7 @@ export class MariaDBConnector implements Connector {
       const queryParams = schema ? [schema, tableName] : [tableName];
 
       // Get table columns with comments
-      const rows = await this.pool.query(
+      const rows = (await this.pool.query(
         `
         SELECT
           COLUMN_NAME as column_name,
@@ -377,7 +384,7 @@ export class MariaDBConnector implements Connector {
         ORDER BY ORDINAL_POSITION
       `,
         queryParams
-      ) as any[];
+      )) as any[];
 
       // Normalize empty string comments to null for token-efficient output
       return rows.map((row: any) => ({
@@ -399,7 +406,7 @@ export class MariaDBConnector implements Connector {
       const schemaClause = schema ? "WHERE TABLE_SCHEMA = ?" : "WHERE TABLE_SCHEMA = DATABASE()";
       const queryParams = schema ? [schema, tableName] : [tableName];
 
-      const rows = await this.pool.query(
+      const rows = (await this.pool.query(
         `
         SELECT TABLE_COMMENT
         FROM INFORMATION_SCHEMA.TABLES
@@ -407,7 +414,7 @@ export class MariaDBConnector implements Connector {
         AND TABLE_NAME = ?
       `,
         queryParams
-      ) as any[];
+      )) as any[];
 
       if (rows.length > 0) {
         return rows[0].TABLE_COMMENT || null;
@@ -418,7 +425,10 @@ export class MariaDBConnector implements Connector {
     }
   }
 
-  async getStoredProcedures(schema?: string, routineType?: "procedure" | "function"): Promise<string[]> {
+  async getStoredProcedures(
+    schema?: string,
+    routineType?: "procedure" | "function"
+  ): Promise<string[]> {
     if (!this.pool) {
       throw new Error("Not connected to database");
     }
@@ -440,7 +450,7 @@ export class MariaDBConnector implements Connector {
       }
 
       // Get stored procedures and/or functions
-      const rows = await this.pool.query(
+      const rows = (await this.pool.query(
         `
         SELECT ROUTINE_NAME
         FROM INFORMATION_SCHEMA.ROUTINES
@@ -448,7 +458,7 @@ export class MariaDBConnector implements Connector {
         ORDER BY ROUTINE_NAME
       `,
         queryParams
-      ) as any[];
+      )) as any[];
 
       return rows.map((row) => row.ROUTINE_NAME);
     } catch (error) {
@@ -471,7 +481,7 @@ export class MariaDBConnector implements Connector {
       const queryParams = schema ? [schema, procedureName] : [procedureName];
 
       // Get details of the stored procedure
-      const rows = await this.pool.query(
+      const rows = (await this.pool.query(
         `
         SELECT 
           r.ROUTINE_NAME AS procedure_name,
@@ -498,7 +508,7 @@ export class MariaDBConnector implements Connector {
         AND r.ROUTINE_NAME = ?
       `,
         queryParams
-      ) as any[];
+      )) as any[];
 
       if (rows.length === 0) {
         const schemaName = schema || "current schema";
@@ -519,9 +529,9 @@ export class MariaDBConnector implements Connector {
         if (procedure.procedure_type === "procedure") {
           // Try to get the definition from SHOW CREATE PROCEDURE
           try {
-            const defRows = await this.pool.query(`
+            const defRows = (await this.pool.query(`
               SHOW CREATE PROCEDURE ${quotedSchema}.${quotedProcName}
-            `) as any[];
+            `)) as any[];
 
             if (defRows && defRows.length > 0) {
               definition = defRows[0]["Create Procedure"];
@@ -532,9 +542,9 @@ export class MariaDBConnector implements Connector {
         } else {
           // Try to get the definition for functions
           try {
-            const defRows = await this.pool.query(`
+            const defRows = (await this.pool.query(`
               SHOW CREATE FUNCTION ${quotedSchema}.${quotedProcName}
-            `) as any[];
+            `)) as any[];
 
             if (defRows && defRows.length > 0) {
               definition = defRows[0]["Create Function"];
@@ -546,14 +556,14 @@ export class MariaDBConnector implements Connector {
 
         // Last attempt - try to get from information_schema.routines if not found yet
         if (!definition) {
-          const bodyRows = await this.pool.query(
+          const bodyRows = (await this.pool.query(
             `
             SELECT ROUTINE_DEFINITION, ROUTINE_BODY 
             FROM INFORMATION_SCHEMA.ROUTINES
             WHERE ROUTINE_SCHEMA = ? AND ROUTINE_NAME = ?
           `,
             [schemaValue, procedureName]
-          ) as any[];
+          )) as any[];
 
           if (bodyRows && bodyRows.length > 0) {
             if (bodyRows[0].ROUTINE_DEFINITION) {
@@ -584,7 +594,7 @@ export class MariaDBConnector implements Connector {
 
   // Helper method to get current schema (database) name
   private async getCurrentSchema(): Promise<string> {
-    const rows = await this.pool!.query("SELECT DATABASE() AS DB") as any[];
+    const rows = (await this.pool!.query("SELECT DATABASE() AS DB")) as any[];
     return rows[0].DB;
   }
 
@@ -597,7 +607,7 @@ export class MariaDBConnector implements Connector {
     if (!this.pool) {
       throw new Error("Not connected to database");
     }
-    const rows = await this.pool.query("SELECT DATABASE() AS DB") as any[];
+    const rows = (await this.pool.query("SELECT DATABASE() AS DB")) as any[];
     return rows[0]?.DB ?? null;
   }
 
@@ -609,74 +619,73 @@ export class MariaDBConnector implements Connector {
     // Get a dedicated connection from the pool to ensure session consistency
     // This is critical for session-specific features like LAST_INSERT_ID()
     const conn = await this.pool.getConnection();
-    try {
-      // Engine-level read-only backstop: run the batch inside a READ ONLY
-      // transaction so MariaDB rejects DML writes (INSERT/UPDATE/DELETE/REPLACE)
-      // that the keyword classifier missed (e.g. function-based writes). Note this
-      // does NOT stop DDL: statements like DROP/CREATE perform an implicit COMMIT
-      // that ends the read-only transaction first, so DDL escapes. Stacked-DDL
-      // payloads (e.g. `SELECT 1--1;DROP TABLE t`) are instead rejected upstream by
-      // the read-only classifier, which now splits `--`-hidden statements (see
-      // scanSingleLineCommentMySQL in sql-parser.ts).
-      if (options.readonly) {
-        await conn.query("START TRANSACTION READ ONLY");
-      }
-
-      // Apply maxRows limit to SELECT queries if specified
-      let processedSQL = sql;
-      if (options.maxRows) {
-        // Handle multi-statement SQL by processing each statement individually
-        const statements = splitSQLStatements(sql, "mariadb");
-
-        const processedStatements = statements.map(statement =>
-          SQLRowLimiter.applyMaxRows(statement, options.maxRows)
-        );
-
-        processedSQL = processedStatements.join('; ');
-        if (sql.trim().endsWith(';')) {
-          processedSQL += ';';
+    return executeInDatabaseContext(conn, this.defaultDatabase, options.database, async () => {
+      try {
+        // Engine-level read-only backstop: run the batch inside a READ ONLY
+        // transaction so MariaDB rejects DML writes (INSERT/UPDATE/DELETE/REPLACE)
+        // that the keyword classifier missed (e.g. function-based writes). Note this
+        // does NOT stop DDL: statements like DROP/CREATE perform an implicit COMMIT
+        // that ends the read-only transaction first, so DDL escapes. Stacked-DDL
+        // payloads (e.g. `SELECT 1--1;DROP TABLE t`) are instead rejected upstream by
+        // the read-only classifier, which now splits `--`-hidden statements (see
+        // scanSingleLineCommentMySQL in sql-parser.ts).
+        if (options.readonly) {
+          await conn.query("START TRANSACTION READ ONLY");
         }
-      }
 
-      // Use dedicated connection - MariaDB driver returns rows directly for single statements
-      // Pass parameters if provided
-      let results: any;
-      if (parameters && parameters.length > 0) {
-        try {
-          results = await conn.query(processedSQL, parameters);
-        } catch (error) {
-          console.error(`[MariaDB executeSQL] ERROR: ${(error as Error).message}`);
-          console.error(`[MariaDB executeSQL] SQL: ${processedSQL}`);
-          console.error(`[MariaDB executeSQL] Parameters: ${JSON.stringify(parameters)}`);
-          throw error;
+        // Apply maxRows limit to SELECT queries if specified
+        let processedSQL = sql;
+        if (options.maxRows) {
+          // Handle multi-statement SQL by processing each statement individually
+          const statements = splitSQLStatements(sql, "mariadb");
+
+          const processedStatements = statements.map((statement) =>
+            SQLRowLimiter.applyMaxRows(statement, options.maxRows)
+          );
+
+          processedSQL = processedStatements.join("; ");
+          if (sql.trim().endsWith(";")) {
+            processedSQL += ";";
+          }
         }
-      } else {
-        results = await conn.query(processedSQL);
-      }
 
-      // Parse results using shared utility that handles both single and multi-statement queries
-      const rows = parseQueryResults(results);
-      const rowCount = extractAffectedRows(results);
-
-      if (options.readonly) {
-        await conn.query("COMMIT");
-      }
-      return { rows, rowCount };
-    } catch (error) {
-      if (options.readonly) {
-        // Best-effort rollback so the connection returns to the pool clean.
-        try {
-          await conn.query("ROLLBACK");
-        } catch {
-          // ignore rollback failure; the original error is more useful
+        // Use dedicated connection - MariaDB driver returns rows directly for single statements
+        // Pass parameters if provided
+        let results: any;
+        if (parameters && parameters.length > 0) {
+          try {
+            results = await conn.query(processedSQL, parameters);
+          } catch (error) {
+            console.error(`[MariaDB executeSQL] ERROR: ${(error as Error).message}`);
+            console.error(`[MariaDB executeSQL] SQL: ${processedSQL}`);
+            console.error(`[MariaDB executeSQL] Parameters: ${JSON.stringify(parameters)}`);
+            throw error;
+          }
+        } else {
+          results = await conn.query(processedSQL);
         }
+
+        // Parse results using shared utility that handles both single and multi-statement queries
+        const rows = parseQueryResults(results);
+        const rowCount = extractAffectedRows(results);
+
+        if (options.readonly) {
+          await conn.query("COMMIT");
+        }
+        return { rows, rowCount };
+      } catch (error) {
+        if (options.readonly) {
+          // Best-effort rollback so the connection returns to the pool clean.
+          try {
+            await conn.query("ROLLBACK");
+          } catch {
+            // ignore rollback failure; the original error is more useful
+          }
+        }
+        console.error("Error executing query:", error);
+        throw error;
       }
-      console.error("Error executing query:", error);
-      throw error;
-    } finally {
-      // Always release the connection back to the pool
-      conn.release();
-    }
+    });
   }
 }
 
