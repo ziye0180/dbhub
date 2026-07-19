@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { ConnectorManager } from "../connectors/manager.js";
+import type { Connector } from "../connectors/interface.js";
 import { createToolSuccessResponse, createToolErrorResponse } from "../utils/response-formatter.js";
 import { getToolRegistry } from "./registry.js";
 import { BUILTIN_TOOL_EXECUTE_SQL } from "./builtin-tools.js";
@@ -47,10 +48,28 @@ export function createExecuteSqlToolHandler(sourceId?: string) {
       const toolConfig = registry.getBuiltinToolConfig(BUILTIN_TOOL_EXECUTE_SQL, actualSourceId);
 
       const configuredReadonly = toolConfig?.readonly === true;
+      const temporaryWriteMode =
+        toolConfig && "temporary_write_mode" in toolConfig
+          ? (toolConfig.temporary_write_mode ?? "dml")
+          : "dml";
       const authorizationSourceId = sourceId ?? actualSourceId;
+      const accessDecision = classifySqlAccess(sql, connector.id, temporaryWriteMode);
+      if (
+        configuredReadonly &&
+        temporaryWriteMode === "migration" &&
+        accessDecision.kind === "write"
+      ) {
+        const databaseGuard = await verifyMigrationDatabase(connector, actualSourceId);
+        if (databaseGuard) {
+          success = false;
+          errorMessage = databaseGuard.errorMessage;
+          return databaseGuard.errorResponse;
+        }
+      }
       const writeAuthorization = configuredReadonly
         ? await authorizeTemporaryWrite(
-            classifySqlAccess(sql, connector.id),
+            accessDecision,
+            temporaryWriteMode,
             authorizationSourceId,
           )
         : { effectiveReadonly: toolConfig?.readonly, lease: null };
@@ -117,8 +136,34 @@ interface DeniedWriteAccess {
   errorResponse: ReturnType<typeof createToolErrorResponse>;
 }
 
+async function verifyMigrationDatabase(
+  connector: Connector,
+  sourceId: string
+): Promise<DeniedWriteAccess | null> {
+  const configuredDatabase = ConnectorManager.getSourceConfig(sourceId)?.database;
+  const runtimeDatabase = connector.getDefaultSchema
+    ? await connector.getDefaultSchema()
+    : null;
+  if (configuredDatabase && runtimeDatabase === configuredDatabase) {
+    return null;
+  }
+
+  const errorMessage =
+    `Migration source '${sourceId}' database mismatch: configured ` +
+    `'${configuredDatabase ?? "<missing>"}', runtime '${runtimeDatabase ?? "<missing>"}'`;
+  return {
+    errorMessage,
+    errorResponse: createToolErrorResponse(errorMessage, "MIGRATION_DATABASE_MISMATCH", {
+      source_id: sourceId,
+      configured_database: configuredDatabase ?? null,
+      runtime_database: runtimeDatabase ?? null,
+    }),
+  };
+}
+
 async function authorizeTemporaryWrite(
   decision: SqlAccessDecision,
+  temporaryWriteMode: "dml" | "migration",
   sourceId: string,
 ): Promise<AuthorizedWriteAccess | DeniedWriteAccess> {
   if (decision.kind === "read") {
@@ -164,6 +209,7 @@ async function authorizeTemporaryWrite(
       errorResponse: createToolErrorResponse(errorMessage, "WRITE_ACCESS_REQUIRED", {
         source_id: sourceId,
         operation: decision.operation,
+        temporary_write_mode: temporaryWriteMode,
         command,
         default_ttl: "10m",
       }),
@@ -194,5 +240,11 @@ function describeDeniedWrite(reason: Extract<SqlAccessDecision, { kind: "denied"
       return "Temporary write access requires UPDATE and DELETE statements to include a top-level WHERE clause";
     case "operation_not_allowed":
       return "Temporary write access allows only INSERT, UPDATE, and DELETE; DDL and administrative operations remain blocked";
+    case "cross_database_target":
+      return "Temporary migration access requires every write target to use the source's default database without database qualification";
+    case "migration_sequence_invalid":
+      return "Temporary migration access requires each prepared statement to be created from a validated local variable, executed once, and deallocated in the same request";
+    case "migration_statement_not_allowed":
+      return "Temporary migration access allows only guarded forward CREATE TABLE, ALTER TABLE ADD, and CREATE INDEX operations";
   }
 }

@@ -10,15 +10,21 @@ export const MIN_WRITE_LEASE_TTL_MS = 60 * 1000;
 /** Longest accepted write lease. */
 export const MAX_WRITE_LEASE_TTL_MS = 60 * 60 * 1000;
 
-/** DML operations that a temporary lease may authorize. */
+/** DML operations authorized by the default temporary lease mode. */
 export const WRITE_OPERATIONS = ["insert", "update", "delete"] as const;
-/** DML operation authorized by a write lease. */
+/** Forward-migration capability authorized only for configured sources. */
+export const MIGRATION_WRITE_OPERATION = "migration" as const;
+/** Complete set of capabilities accepted in the persisted lease contract. */
+export const WRITE_PERMISSIONS = [...WRITE_OPERATIONS, MIGRATION_WRITE_OPERATION] as const;
+/** DML operation classified by the default write policy. */
 export type WriteOperation = (typeof WRITE_OPERATIONS)[number];
+/** Capability persisted in a source-scoped temporary lease. */
+export type WritePermission = (typeof WRITE_PERMISSIONS)[number];
 
 /** Persisted, source-scoped temporary write authorization. */
 export interface WriteLease {
   source_id: string;
-  operations: readonly WriteOperation[];
+  operations: readonly WritePermission[];
   enabled_at: string;
   expires_at: string;
 }
@@ -31,7 +37,7 @@ interface WriteLeaseState {
 const writeLeaseSchema = z
   .object({
     source_id: z.string().min(1),
-    operations: z.array(z.enum(WRITE_OPERATIONS)).min(1),
+    operations: z.array(z.enum(WRITE_PERMISSIONS)).min(1),
     enabled_at: z.string().datetime(),
     expires_at: z.string().datetime(),
   })
@@ -45,6 +51,18 @@ const writeLeaseSchema = z
         code: z.ZodIssueCode.custom,
         message: "Write lease duration must be between 1 minute and 1 hour",
         path: ["expires_at"],
+      });
+    }
+    const isMigrationOnly =
+      lease.operations.length === 1 && lease.operations[0] === MIGRATION_WRITE_OPERATION;
+    const isCompleteDml =
+      lease.operations.length === WRITE_OPERATIONS.length &&
+      WRITE_OPERATIONS.every((operation) => lease.operations.includes(operation));
+    if (!isMigrationOnly && !isCompleteDml) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Write lease must contain either the complete DML profile or migration only",
+        path: ["operations"],
       });
     }
   });
@@ -73,25 +91,26 @@ const writeLeaseStateSchema = z
  * Repository for the host-managed write lease state file.
  *
  * The DBHub server only reads this file. The host CLI writes it atomically so
- * the server never observes partial JSON while deciding whether to allow DML.
+ * the server never observes partial JSON while deciding whether to allow writes.
  */
 export class WriteLeaseStore {
   public constructor(public readonly filePath: string) {}
 
-  /** Enables INSERT, UPDATE, and DELETE for one source until the lease expires. */
+  /** Enables the supplied configured capability for one source until expiry. */
   public async enable(
     sourceId: string,
     ttlMs: number = DEFAULT_WRITE_LEASE_TTL_MS,
-    now: Date = new Date()
+    now: Date = new Date(),
+    permissions: readonly WritePermission[] = WRITE_OPERATIONS
   ): Promise<WriteLease> {
     this.validateTtl(ttlMs);
     const state = await this.readState();
-    const lease: WriteLease = {
+    const lease = writeLeaseSchema.parse({
       source_id: sourceId,
-      operations: [...WRITE_OPERATIONS],
+      operations: [...permissions],
       enabled_at: now.toISOString(),
       expires_at: new Date(now.getTime() + ttlMs).toISOString(),
-    };
+    });
 
     const existingLeaseIndex = state.leases.findIndex(
       (existingLease) => existingLease.source_id === sourceId

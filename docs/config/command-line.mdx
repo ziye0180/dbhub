@@ -46,6 +46,11 @@ resolve the same mounted state directory through different deployment paths.
 The commands administer an existing DBHub deployment; they do not start a
 second MCP server.
 
+The command syntax is identical for every source. The source's `execute_sql`
+configuration decides which capability is persisted in the lease: omitted or
+`dml` permits guarded INSERT/UPDATE/DELETE, while `migration` permits only the
+forward migration grammar documented under `temporary_write_mode`.
+
 For Docker Compose, create the host directory before starting DBHub and mount
 it read-only into the server container:
 

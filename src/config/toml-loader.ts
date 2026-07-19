@@ -7,6 +7,7 @@ import { parseCommandLineArgs } from "./env.js";
 import { parseConnectionInfoFromDSN, getDefaultPortForType } from "../utils/dsn-obfuscate.js";
 import { SafeURL } from "../utils/safe-url.js";
 import { BUILTIN_TOOLS, BUILTIN_TOOL_EXECUTE_SQL, BUILTIN_TOOL_SEARCH_OBJECTS } from "../tools/builtin-tools.js";
+import { validateTemporaryWriteConfig } from "./temporary-write-config.js";
 
 /**
  * Load and parse TOML configuration file
@@ -181,6 +182,12 @@ function validateToolsConfig(
     const isBuiltin = (BUILTIN_TOOLS as readonly string[]).includes(tool.name);
     const isExecuteSql = tool.name === BUILTIN_TOOL_EXECUTE_SQL;
 
+    if (!isExecuteSql && "temporary_write_mode" in tool) {
+      throw new Error(
+        `Configuration file ${configPath}: temporary_write_mode field is only valid for execute_sql`
+      );
+    }
+
     if (isBuiltin) {
       // Built-in tools should NOT have custom tool fields
       if (tool.description || tool.statement || tool.parameters) {
@@ -189,10 +196,15 @@ function validateToolsConfig(
         );
       }
 
-      // Only execute_sql can have readonly and max_rows
-      if (!isExecuteSql && (tool.readonly !== undefined || tool.max_rows !== undefined)) {
+      // Only execute_sql can have readonly, max_rows, and temporary_write_mode
+      if (
+        !isExecuteSql &&
+        (tool.readonly !== undefined ||
+          tool.max_rows !== undefined ||
+          "temporary_write_mode" in tool)
+      ) {
         throw new Error(
-          `Configuration file ${configPath}: tool '${tool.name}' cannot have readonly or max_rows fields ` +
+          `Configuration file ${configPath}: tool '${tool.name}' cannot have readonly, max_rows, or temporary_write_mode fields ` +
             `(these are only valid for ${BUILTIN_TOOL_EXECUTE_SQL} tool)`
         );
       }
@@ -219,6 +231,10 @@ function validateToolsConfig(
       throw new Error(
         `Configuration file ${configPath}: tool '${tool.name}' has invalid readonly. Must be a boolean (true or false).`
       );
+    }
+
+    if (isExecuteSql && "temporary_write_mode" in tool) {
+      validateTemporaryWriteConfig(tool, sources, configPath);
     }
   }
 }

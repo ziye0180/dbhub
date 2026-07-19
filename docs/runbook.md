@@ -86,10 +86,11 @@ ssh root@39.108.79.68
 dbhub status
 dbhub enable awakening             # 默认 10 分钟
 dbhub enable cognitive --ttl 30m
+dbhub enable awaken_pro_prod       # 同一命令；capability 由 source 配置决定
 dbhub disable awakening
 ```
 
-`dbhub enable` 只创建临时 `INSERT/UPDATE/DELETE` lease；DDL、无 `WHERE` 的 `UPDATE/DELETE`、包含写操作的多语句和 lease 过期后的写入仍然拒绝。纯只读多语句保持既有支持。AI 收到 `WRITE_ACCESS_REQUIRED` 后只能提示上述命令，不能通过 MCP/Bearer 自行开启权限。
+`dbhub enable` 的命令格式不区分权限级别；CLI 会把目标 source 配置的 capability 固化进 lease。默认 `dml` 只允许受控 `INSERT/UPDATE/DELETE`；显式 `migration` 只允许默认库中的前向结构迁移，并拒绝普通 DML、`USE`、跨库写目标和破坏性 DDL。lease 过期后的写入一律拒绝。AI 收到 `WRITE_ACCESS_REQUIRED` 后只能提示上述命令，不能通过 MCP/Bearer 自行开启权限。
 
 每个生产 SQL source 必须同时配置 `execute_sql` 与 `search_objects`。后者让 AI 通过 `object_type = "schema"` 获取账号实际可见数据库；不要让工具描述指向一个未注册的 `search_objects`。
 

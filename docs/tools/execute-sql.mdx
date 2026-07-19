@@ -146,7 +146,7 @@ can temporarily unlock a single source for data changes without editing the
 configuration or restarting the server:
 
 ```bash
-# Enables INSERT, UPDATE, and DELETE for 10 minutes
+# Enables the source's configured temporary write capability for 10 minutes
 dbhub enable production
 
 # Override the duration (maximum: 1 hour)
@@ -167,10 +167,18 @@ Without an active lease, a write returns `WRITE_ACCESS_REQUIRED` and tells the
 AI to ask the user to run `dbhub enable <source>`. The AI must never execute the
 authorization command on the user's behalf.
 
-A lease allows exactly one `INSERT`, `UPDATE`, or `DELETE` statement per tool
-call. `UPDATE` and `DELETE` require a top-level `WHERE` clause. DDL,
-administrative SQL, stored routine execution, and multi-statement writes remain
-blocked even while a lease is active. Expired leases are treated as read-only
+The command remains identical for both supported modes. With the default
+`temporary_write_mode = "dml"`, a lease allows exactly one INSERT, UPDATE, or
+DELETE statement per tool call, and UPDATE/DELETE require a top-level WHERE
+clause.
+
+An explicitly configured `temporary_write_mode = "migration"` source must be
+MySQL/MariaDB and must define a default database. Its lease allows forward
+CREATE TABLE, ALTER TABLE ADD, CREATE INDEX, and closed guarded
+SET/PREPARE/EXECUTE/DEALLOCATE batches. It rejects ordinary DML, `USE`,
+database-qualified write targets, DROP/TRUNCATE, and arbitrary prepared SQL.
+The issued capability is stored in the lease, so a later configuration change
+cannot broaden an already active lease. Expired leases are treated as read-only
 without requiring a cleanup command.
 
 <Warning>

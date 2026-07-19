@@ -21,8 +21,48 @@ describe("write-access CLI", () => {
     });
 
     expect(exitCode).toBe(0);
-    expect(enable).toHaveBeenCalledWith("awakening", 600_000, expect.any(Date));
+    expect(enable).toHaveBeenCalledWith(
+      "awakening",
+      600_000,
+      expect.any(Date),
+      ["insert", "update", "delete"]
+    );
     expect(output.join("\n")).toContain("10 minutes");
+  });
+
+  it("uses the unchanged enable command to issue a migration-only lease", async () => {
+    const enable = vi.fn().mockResolvedValue({
+      source_id: "awaken_pro_prod",
+      operations: ["migration"],
+      enabled_at: "2026-07-13T12:00:00.000Z",
+      expires_at: "2026-07-13T12:10:00.000Z",
+    });
+    const output: string[] = [];
+
+    await executeWriteAccessCommand(["enable", "awaken_pro_prod"], {
+      store: { enable } as unknown as WriteLeaseStore,
+      sources: new Map([
+        [
+          "awaken_pro_prod",
+          {
+            type: "mysql",
+            executeSqlEnabled: true,
+            readonly: true,
+            temporaryWriteMode: "migration",
+          },
+        ],
+      ]),
+      now: () => new Date("2026-07-13T12:00:00.000Z"),
+      writeOutput: (message) => output.push(message),
+    });
+
+    expect(enable).toHaveBeenCalledWith(
+      "awaken_pro_prod",
+      600_000,
+      expect.any(Date),
+      ["migration"]
+    );
+    expect(output.join("\n")).toContain("MIGRATION");
   });
 
   it("rejects an unknown source", async () => {
@@ -66,7 +106,12 @@ describe("write-access CLI", () => {
       writeOutput: vi.fn(),
     });
 
-    expect(enable).toHaveBeenCalledWith("awakening", 1_800_000, expect.any(Date));
+    expect(enable).toHaveBeenCalledWith(
+      "awakening",
+      1_800_000,
+      expect.any(Date),
+      ["insert", "update", "delete"]
+    );
   });
 
   it("rejects a ttl longer than one hour", async () => {

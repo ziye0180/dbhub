@@ -141,6 +141,12 @@ export interface components {
              * @example 1000
              */
             max_rows?: number;
+            /**
+             * @description Capability issued by the host-side temporary write lease for execute_sql
+             * @example migration
+             * @enum {string}
+             */
+            temporary_write_mode?: "dml" | "migration";
         };
         /** @description Parameter definition for a tool */
         ToolParameter: {

@@ -335,6 +335,129 @@ describe('execute-sql tool', () => {
     });
   });
 
+  describe('temporary migration mode', () => {
+    const migrationSql = `
+CREATE TABLE IF NOT EXISTS \`pro_user_account\` (\`id\` bigint NOT NULL);
+SET @sql := IF((SELECT COUNT(1) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'pro_upload_intent' AND COLUMN_NAME = 'intent_no') = 0, 'ALTER TABLE \`pro_upload_intent\` ADD COLUMN \`intent_no\` varchar(64) NULL', 'SELECT 1');
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+`;
+
+    beforeEach(() => {
+      mockConnector = createMockConnector('mysql', 'awaken_pro_prod');
+      mockConnector.getDefaultSchema = vi.fn().mockResolvedValue('awaken_pro_prod');
+      mockGetCurrentConnector.mockReturnValue(mockConnector);
+      vi.mocked(ConnectorManager.getSourceConfig).mockReturnValue({
+        id: 'awaken_pro_prod',
+        type: 'mysql',
+        database: 'awaken_pro_prod',
+      } as any);
+      mockGetToolRegistry.mockReturnValue({
+        getBuiltinToolConfig: vi.fn().mockReturnValue({
+          readonly: true,
+          temporary_write_mode: 'migration',
+        }),
+      } as any);
+    });
+
+    it('asks for the same host enable command when no migration lease exists', async () => {
+      const handler = createExecuteSqlToolHandler('awaken_pro_prod');
+      const result = await handler({ sql: migrationSql }, null);
+      const parsedResult = parseToolResponse(result);
+
+      expect(parsedResult.code).toBe('WRITE_ACCESS_REQUIRED');
+      expect(parsedResult.details.command).toBe('dbhub enable awaken_pro_prod');
+      expect(mockConnector.executeSQL).not.toHaveBeenCalled();
+    });
+
+    it('keeps read queries available without a migration lease', async () => {
+      vi.mocked(mockConnector.executeSQL).mockResolvedValue({ rows: [{ id: 1 }], rowCount: 1 });
+
+      const handler = createExecuteSqlToolHandler('awaken_pro_prod');
+      const result = await handler({ sql: 'SELECT * FROM users' }, null);
+
+      expect(parseToolResponse(result).success).toBe(true);
+      expect(mockGetActiveWriteLease).not.toHaveBeenCalled();
+      expect(mockConnector.executeSQL).toHaveBeenCalledWith('SELECT * FROM users', {
+        readonly: true,
+        maxRows: undefined,
+      });
+    });
+
+    it('rejects a DML lease for migration SQL', async () => {
+      mockGetActiveWriteLease.mockResolvedValue({
+        source_id: 'awaken_pro_prod',
+        operations: ['insert', 'update', 'delete'],
+        enabled_at: '2026-07-13T12:00:00.000Z',
+        expires_at: '2026-07-13T12:10:00.000Z',
+      });
+
+      const handler = createExecuteSqlToolHandler('awaken_pro_prod');
+      const result = await handler({ sql: migrationSql }, null);
+
+      expect(parseToolResponse(result).code).toBe('WRITE_OPERATION_NOT_ALLOWED');
+      expect(mockConnector.executeSQL).not.toHaveBeenCalled();
+    });
+
+    it('executes forward DDL unchanged with a matching migration lease', async () => {
+      const lease = {
+        source_id: 'awaken_pro_prod',
+        operations: ['migration'] as const,
+        enabled_at: '2026-07-13T12:00:00.000Z',
+        expires_at: '2026-07-13T12:10:00.000Z',
+      };
+      mockGetActiveWriteLease.mockResolvedValue(lease);
+      vi.mocked(mockConnector.executeSQL).mockResolvedValue({ rows: [], rowCount: 0 });
+
+      const handler = createExecuteSqlToolHandler('awaken_pro_prod');
+      const result = await handler({ sql: migrationSql }, null);
+
+      expect(parseToolResponse(result).success).toBe(true);
+      expect(mockConnector.executeSQL).toHaveBeenCalledWith(migrationSql, {
+        readonly: false,
+        maxRows: undefined,
+      });
+    });
+
+    it('does not let a migration lease authorize ordinary DML', async () => {
+      mockGetActiveWriteLease.mockResolvedValue({
+        source_id: 'awaken_pro_prod',
+        operations: ['migration'],
+        enabled_at: '2026-07-13T12:00:00.000Z',
+        expires_at: '2026-07-13T12:10:00.000Z',
+      });
+
+      const handler = createExecuteSqlToolHandler('awaken_pro_prod');
+      const result = await handler({ sql: 'INSERT INTO users (id) VALUES (1)' }, null);
+
+      expect(parseToolResponse(result).code).toBe('WRITE_OPERATION_NOT_ALLOWED');
+      expect(mockConnector.executeSQL).not.toHaveBeenCalled();
+    });
+
+    it('fails closed when the runtime default database differs from configuration', async () => {
+      vi.mocked(mockConnector.getDefaultSchema!).mockResolvedValue('awaken_payment');
+      mockGetActiveWriteLease.mockResolvedValue({
+        source_id: 'awaken_pro_prod',
+        operations: ['migration'],
+        enabled_at: '2026-07-13T12:00:00.000Z',
+        expires_at: '2026-07-13T12:10:00.000Z',
+      });
+
+      const handler = createExecuteSqlToolHandler('awaken_pro_prod');
+      const result = await handler({ sql: migrationSql }, null);
+      const parsedResult = parseToolResponse(result);
+
+      expect(parsedResult.code).toBe('MIGRATION_DATABASE_MISMATCH');
+      expect(parsedResult.details).toMatchObject({
+        source_id: 'awaken_pro_prod',
+        configured_database: 'awaken_pro_prod',
+        runtime_database: 'awaken_payment',
+      });
+      expect(mockConnector.executeSQL).not.toHaveBeenCalled();
+    });
+  });
+
   describe('SQL comments handling in readonly mode', () => {
     beforeEach(() => {
       mockGetToolRegistry.mockReturnValue({

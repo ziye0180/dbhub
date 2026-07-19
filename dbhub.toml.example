@@ -229,6 +229,22 @@ dsn = "postgres://postgres:postgres@localhost:5432/myapp"
 # readonly = true
 # max_rows = 1000
 
+# Opt-in forward migration source. The host command remains:
+# dbhub enable app_migrations
+# [[sources]]
+# id = "app_migrations"
+# type = "mysql"
+# host = "localhost"
+# database = "app"
+# user = "${APP_DB_USER}"
+# password = "${APP_DB_PASSWORD}"
+#
+# [[tools]]
+# name = "execute_sql"
+# source = "app_migrations"
+# readonly = true
+# temporary_write_mode = "migration"
+
 # [[tools]]
 # name = "search_objects"
 # source = "local_pg"

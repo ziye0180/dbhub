@@ -2,8 +2,12 @@ import type { ConnectorType } from "../connectors/interface.js";
 import {
   DEFAULT_WRITE_LEASE_TTL_MS,
   MAX_WRITE_LEASE_TTL_MS,
+  MIGRATION_WRITE_OPERATION,
+  WRITE_OPERATIONS,
   WriteLeaseStore,
 } from "../write-access/index.js";
+import type { TemporaryWriteMode } from "../types/config.js";
+import type { WritePermission } from "../write-access/index.js";
 
 const WRITE_ACCESS_COMMANDS = new Set(["enable", "disable", "status"]);
 
@@ -20,6 +24,7 @@ export interface WriteAccessSource {
   type: ConnectorType | "redis";
   executeSqlEnabled: boolean;
   readonly: boolean;
+  temporaryWriteMode?: TemporaryWriteMode;
 }
 
 /** Returns whether the first positional argument is a write-access command. */
@@ -54,7 +59,9 @@ async function enableSource(
   requireLeaseManagedSource(sourceId, dependencies.sources);
   const ttlMs = parseTtlArgument(args);
   const now = dependencies.now();
-  const lease = await dependencies.store.enable(sourceId, ttlMs, now);
+  const source = dependencies.sources.get(sourceId)!;
+  const permissions = getPermissions(source.temporaryWriteMode ?? "dml");
+  const lease = await dependencies.store.enable(sourceId, ttlMs, now, permissions);
   const durationMinutes = ttlMs / 60_000;
 
   dependencies.writeOutput(
@@ -62,7 +69,7 @@ async function enableSource(
       "Write access enabled",
       "",
       `Source: ${sourceId}`,
-      "Operations: INSERT, UPDATE, DELETE",
+      `Operations: ${formatPermissions(lease.operations)}`,
       `Expires in: ${durationMinutes} ${durationMinutes === 1 ? "minute" : "minutes"}`,
       `Expires at: ${lease.expires_at}`,
     ].join("\n")
@@ -105,11 +112,29 @@ async function showStatus(
         return `${sourceId}\twritable-configured\t-`;
       }
       const lease = activeLeases.get(sourceId);
-      return lease ? `${sourceId}\twritable\t${lease.expires_at}` : `${sourceId}\treadonly\t-`;
+      return lease
+        ? `${sourceId}\twritable:${formatPermissionMode(lease.operations)}\t${lease.expires_at}`
+        : `${sourceId}\treadonly\t-`;
     });
 
   dependencies.writeOutput(["SOURCE\tMODE\tEXPIRES", ...rows].join("\n"));
   return 0;
+}
+
+function getPermissions(mode: TemporaryWriteMode): readonly WritePermission[] {
+  return mode === "migration" ? [MIGRATION_WRITE_OPERATION] : WRITE_OPERATIONS;
+}
+
+function formatPermissions(permissions: readonly WritePermission[]): string {
+  return permissions
+    .map((permission) =>
+      permission === MIGRATION_WRITE_OPERATION ? "MIGRATION" : permission.toUpperCase()
+    )
+    .join(", ");
+}
+
+function formatPermissionMode(permissions: readonly WritePermission[]): TemporaryWriteMode {
+  return permissions.includes(MIGRATION_WRITE_OPERATION) ? "migration" : "dml";
 }
 
 function requireSourceId(args: readonly string[], command: "enable" | "disable"): string {

@@ -334,6 +334,78 @@ max_rows = -100
       expect(() => loadTomlConfig()).toThrow('invalid max_rows');
     });
 
+    it('should accept migration mode for a readonly MySQL source with a default database', () => {
+      const tomlContent = `
+[[sources]]
+id = "awaken_pro_prod"
+type = "mysql"
+host = "localhost"
+database = "awaken_pro_prod"
+user = "dbhub"
+password = "secret"
+
+[[tools]]
+name = "execute_sql"
+source = "awaken_pro_prod"
+readonly = true
+temporary_write_mode = "migration"
+`;
+      fs.writeFileSync(path.join(tempDir, 'dbhub.toml'), tomlContent);
+
+      expect(loadTomlConfig()?.tools?.[0]).toMatchObject({
+        temporary_write_mode: 'migration',
+      });
+    });
+
+    it.each([
+      [
+        'invalid mode',
+        'mysql',
+        'database = "app"',
+        'readonly = true\ntemporary_write_mode = "admin"',
+        'invalid temporary_write_mode',
+      ],
+      [
+        'writable tool',
+        'mysql',
+        'database = "app"',
+        'readonly = false\ntemporary_write_mode = "migration"',
+        'requires readonly = true',
+      ],
+      [
+        'missing default database',
+        'mysql',
+        '',
+        'readonly = true\ntemporary_write_mode = "migration"',
+        'requires the source to define a default database',
+      ],
+      [
+        'unsupported connector',
+        'postgres',
+        'database = "app"',
+        'readonly = true\ntemporary_write_mode = "migration"',
+        'supports only MySQL and MariaDB',
+      ],
+    ])('should reject migration mode with %s', (_, type, database, toolFields, error) => {
+      const tomlContent = `
+[[sources]]
+id = "test"
+type = "${type}"
+host = "localhost"
+${database}
+user = "dbhub"
+password = "secret"
+
+[[tools]]
+name = "execute_sql"
+source = "test"
+${toolFields}
+`;
+      fs.writeFileSync(path.join(tempDir, 'dbhub.toml'), tomlContent);
+
+      expect(() => loadTomlConfig()).toThrow(error);
+    });
+
     it('should throw error for invalid ssh_port', () => {
       const tomlContent = `
 [[sources]]
@@ -2087,6 +2159,26 @@ database = ":memory:"
   });
 
   describe('Custom Tool Configuration', () => {
+    it('should reject temporary_write_mode on a custom tool', () => {
+      const tomlContent = `
+[[sources]]
+id = "test_db"
+dsn = "postgres://user:pass@localhost:5432/testdb"
+
+[[tools]]
+name = "get_active_users"
+source = "test_db"
+description = "Get all active users"
+statement = "SELECT * FROM users WHERE active = true"
+temporary_write_mode = "migration"
+`;
+      fs.writeFileSync(path.join(tempDir, 'dbhub.toml'), tomlContent);
+
+      expect(() => loadTomlConfig()).toThrow(
+        'temporary_write_mode field is only valid for execute_sql'
+      );
+    });
+
     it('should accept custom tool with readonly and max_rows', () => {
       const tomlContent = `
 [[sources]]

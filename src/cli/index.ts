@@ -50,6 +50,11 @@ function buildWriteAccessSources(config: TomlConfig): Map<string, WriteAccessSou
           type: source.type,
           executeSqlEnabled: configuredTools === undefined || executeSqlTool !== undefined,
           readonly: executeSqlTool?.readonly === true,
+          temporaryWriteMode:
+            executeSqlTool?.name === "execute_sql" &&
+            "temporary_write_mode" in executeSqlTool
+              ? (executeSqlTool.temporary_write_mode ?? "dml")
+              : "dml",
         },
       ];
     })

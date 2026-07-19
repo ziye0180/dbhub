@@ -1,18 +1,21 @@
 import type { ConnectorType } from "../connectors/interface.js";
+import type { TemporaryWriteMode } from "../types/config.js";
 import { isReadOnlySQL } from "./allowed-keywords.js";
+import { classifyMigrationSql, type MigrationDeniedReason } from "./migration-sql-access.js";
 import { splitSQLStatements, stripCommentsAndStrings } from "./sql-parser.js";
 import type { WriteOperation } from "../write-access/index.js";
 
 export type SqlAccessDecision =
   | { kind: "read" }
-  | { kind: "write"; operation: WriteOperation }
+  | { kind: "write"; operation: WriteOperation | "migration" }
   | {
       kind: "denied";
       reason:
         | "empty_sql"
         | "multiple_write_statements"
         | "operation_not_allowed"
-        | "where_required";
+        | "where_required"
+        | MigrationDeniedReason;
     };
 
 interface TopLevelWord {
@@ -44,14 +47,24 @@ const WRITE_OR_ADMIN_KEYWORDS = new Set([
  * INSERT, UPDATE, or DELETE statement; DDL, routines, administrative commands,
  * multi-statement writes, and unbounded UPDATE/DELETE remain blocked.
  */
-export function classifySqlAccess(sql: string, connectorType: ConnectorType): SqlAccessDecision {
+export function classifySqlAccess(
+  sql: string,
+  connectorType: ConnectorType,
+  temporaryWriteMode: TemporaryWriteMode = "dml"
+): SqlAccessDecision {
   const statements = splitSQLStatements(sql, connectorType);
   if (statements.length === 0) {
     return { kind: "denied", reason: "empty_sql" };
   }
-
   if (statements.every((statement) => isReadOnlySQL(statement, connectorType))) {
     return { kind: "read" };
+  }
+
+  if (temporaryWriteMode === "migration") {
+    const migrationDecision = classifyMigrationSql(sql, connectorType);
+    return migrationDecision.kind === "migration"
+      ? { kind: "write", operation: "migration" }
+      : migrationDecision;
   }
 
   if (statements.length !== 1) {

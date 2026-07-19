@@ -562,6 +562,31 @@ Tools define MCP tools (like `execute_sql`) with specific execution settings. To
   See [Execute SQL documentation](/tools/execute-sql#readonly-mode) for more details.
 </ParamField>
 
+### temporary_write_mode
+
+<ParamField path="temporary_write_mode" type="string" default="dml">
+  Select the capability issued by the unchanged host command
+  `dbhub enable &lt;source&gt;`. This setting is valid only for `execute_sql` with
+  `readonly = true`.
+
+  - `dml`: one INSERT, UPDATE, or DELETE per call; UPDATE and DELETE require a
+    top-level WHERE clause.
+  - `migration`: MySQL/MariaDB only. The source must define a default database.
+    Allows forward CREATE TABLE, ALTER TABLE ADD, CREATE INDEX, and statically
+    validated guarded PREPARE sequences in that default database.
+
+  ```toml
+  [[tools]]
+  name = "execute_sql"
+  source = "app_migrations"
+  readonly = true
+  temporary_write_mode = "migration"
+  ```
+
+  Migration mode rejects ordinary DML, `USE`, database-qualified write targets,
+  DROP/TRUNCATE, and incomplete or arbitrary prepared statements.
+</ParamField>
+
 ### max_rows
 
 <ParamField path="max_rows" type="number">

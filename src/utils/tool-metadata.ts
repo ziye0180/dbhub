@@ -5,7 +5,7 @@ import { normalizeSourceId } from "./normalize-id.js";
 import { executeSqlSchema } from "../tools/execute-sql.js";
 import { getToolRegistry } from "../tools/registry.js";
 import { BUILTIN_TOOL_EXECUTE_SQL } from "../tools/builtin-tools.js";
-import type { ParameterConfig, ToolConfig } from "../types/config.js";
+import type { ParameterConfig, TemporaryWriteMode, ToolConfig } from "../types/config.js";
 import { formatEnableWriteCommand } from "../write-access/index.js";
 
 /**
@@ -28,6 +28,7 @@ export interface Tool {
   statement?: string;
   readonly?: boolean;
   max_rows?: number;
+  temporary_write_mode?: TemporaryWriteMode;
 }
 
 /**
@@ -124,6 +125,10 @@ export function getExecuteSqlMetadata(sourceId: string): ToolMetadata {
   const executeOptions = {
     readonly: toolConfig?.readonly,
     maxRows: toolConfig?.max_rows,
+    temporaryWriteMode:
+      toolConfig && "temporary_write_mode" in toolConfig
+        ? (toolConfig.temporary_write_mode ?? "dml")
+        : "dml",
   };
 
   // Determine tool name based on single vs multi-source configuration
@@ -141,10 +146,12 @@ export function getExecuteSqlMetadata(sourceId: string): ToolMetadata {
   const readonlyNote = executeOptions.readonly ? " [READ-ONLY BY DEFAULT]" : "";
   const maxRowsNote = executeOptions.maxRows ? ` (limited to ${executeOptions.maxRows} rows)` : "";
   const defaultDatabaseNote = sourceConfig.database
-    ? ` Default database: '${sourceConfig.database}'. Other accessible databases may exist; use search_objects with object_type='schema' to discover them and qualify cross-database SQL as database.table.`
+    ? executeOptions.temporaryWriteMode === "migration"
+      ? ` Default database: '${sourceConfig.database}'. Temporary migration writes are restricted to unqualified targets in this database.`
+      : ` Default database: '${sourceConfig.database}'. Other accessible databases may exist; use search_objects with object_type='schema' to discover them and qualify cross-database SQL as database.table.`
     : "";
   const temporaryWriteNote = executeOptions.readonly
-    ? ` Write access requires the user to run this command on the DBHub host: ${formatEnableWriteCommand(sourceId)}; never run that authorization command on the user's behalf.`
+    ? ` Temporary ${executeOptions.temporaryWriteMode} access requires the user to run this command on the DBHub host: ${formatEnableWriteCommand(sourceId)}; never run that authorization command on the user's behalf.`
     : "";
   const description = isSingleSource
     ? `${userDescPrefix}Execute SQL queries on the ${dbType} database.${defaultDatabaseNote}${temporaryWriteNote}${readonlyNote}${maxRowsNote}`
@@ -154,7 +161,7 @@ export function getExecuteSqlMetadata(sourceId: string): ToolMetadata {
   const annotations = {
     title,
     // Static MCP annotations must describe every state the tool can enter.
-    // A lease-managed tool is read-only by default but can execute DML later.
+    // A lease-managed tool is read-only by default but can execute configured writes later.
     readOnlyHint: false,
     destructiveHint: true,
     // Both permanently writable and lease-managed execution can be non-idempotent.
@@ -232,6 +239,10 @@ function buildExecuteSqlTool(sourceId: string, toolConfig?: ToolConfig): Tool {
   // ToolConfig is a union type, but ExecuteSqlToolConfig and CustomToolConfig both have these fields
   const readonly = toolConfig && 'readonly' in toolConfig ? toolConfig.readonly : undefined;
   const max_rows = toolConfig && 'max_rows' in toolConfig ? toolConfig.max_rows : undefined;
+  const temporary_write_mode =
+    toolConfig && 'temporary_write_mode' in toolConfig
+      ? toolConfig.temporary_write_mode
+      : undefined;
 
   return {
     name: executeSqlMetadata.name,
@@ -239,6 +250,7 @@ function buildExecuteSqlTool(sourceId: string, toolConfig?: ToolConfig): Tool {
     parameters: executeSqlParameters,
     readonly,
     max_rows,
+    temporary_write_mode,
   };
 }
 

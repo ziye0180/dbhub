@@ -185,6 +185,11 @@ components:
           type: integer
           description: Maximum number of rows returned by SELECT queries (execute_sql and custom tools only)
           example: 1000
+        temporary_write_mode:
+          type: string
+          enum: [dml, migration]
+          description: Capability issued by the host-side temporary write lease for execute_sql
+          example: migration
 
     ToolParameter:
       type: object

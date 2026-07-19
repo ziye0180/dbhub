@@ -143,5 +143,7 @@
 - 生产 lease 状态只存放在 prod-B 的 `/www/dbhub/.dbhub`；DBHub 服务容器只读挂载到 `/app/.dbhub`。
 - `/usr/local/bin/dbhub` 是宿主机管理入口，只允许 `enable`、`disable`、`status`，并通过无网络、只读根文件系统的临时容器写 lease。
 - 普通 MCP Bearer 只允许调用数据库工具，不能开启写权限；不增加 HTTP 管理端点，也不把 `enable` 注册成 MCP tool。
+- `dbhub enable <source>` 命令保持单一入口；实际 lease capability 由目标 `execute_sql` 的 `temporary_write_mode` 决定。默认 `dml` 只允许单条受控 INSERT/UPDATE/DELETE；显式 `migration` 只允许 MySQL/MariaDB 默认库中的 CREATE TABLE、ALTER TABLE ADD、CREATE INDEX 前向结构迁移。
+- migration source 必须配置独立默认库；拒绝 `USE`、跨库 DDL 目标、DROP/TRUNCATE、普通 DML，以及无法静态闭合验证的 prepared statement。授权时 capability 固化进 lease，配置热变更不能扩大已存在 lease。
 
-**Reason**: 本地 CLI 写本地文件无法控制远程 HTTP 容器。共享宿主机状态目录能保持实现简单，同时让“数据库访问”和“授予数据库写权限”处于两个不同的能力边界；AI 即使持有 MCP Bearer，也无法通过 DBHub 自己完成提权。
+**Reason**: 本地 CLI 写本地文件无法控制远程 HTTP 容器。共享宿主机状态目录能保持实现简单，同时让“数据库访问”和“授予数据库写权限”处于两个不同的能力边界；AI 即使持有 MCP Bearer，也无法通过 DBHub 自己完成提权。把 capability 放进配置和 lease，可以复用同一条宿主机命令而不把 DDL 权限扩散到普通 source。
