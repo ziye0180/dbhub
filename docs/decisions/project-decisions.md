@@ -148,3 +148,24 @@
 - migration capability 拒绝 `USE`、跨库 DDL 目标、DROP/TRUNCATE、任意普通 DML，以及无法静态闭合验证的 prepared statement。授权时 capability 固化进 lease，配置热变更不能扩大已存在 lease。
 
 **Reason**: 本地 CLI 写本地文件无法控制远程 HTTP 容器。共享宿主机状态目录能保持实现简单，同时让“数据库访问”和“授予数据库写权限”处于两个不同的能力边界；AI 即使持有 MCP Bearer，也无法通过 DBHub 自己完成提权。把 capability 与 migration 目标放进宿主机配置和 lease，可以复用同一条命令、避免增加记忆成本，并确保 MCP 调用不能选择任意目标库。
+
+## D-011 — Awaken Pro 使用独立 production source
+
+**Date**: 2026-07-22
+
+**Decided By**: ziye
+
+**Context**:
+- 旧配置把 `cognitive` 默认库 `awaken_payment` 的 DML 与 `awaken_pro_prod` migration 绑在同一 source/lease，工具语义与业务边界不一致。
+- Awaken Pro active SaaS baseline 已在一次性获批窗口完成，后续需要稳定覆盖 guarded DML、前向 migration、schema discovery 与只读核验。
+
+**Decision**:
+- 新增独立 `awaken_pro` source，default database 与 `temporary_migration_database` 都固定为 `awaken_pro_prod`，mode 为 `dml_and_migration`。
+- `cognitive` 恢复为 `dml`，只负责默认库 `awaken_payment`。
+- 两个 source 分别取得短 lease；AI/MCP 不能自行开启 lease，也不能通过 SQL 或参数切换写目标。
+- 2026-07-22 baseline 之后，Awaken Pro 生产数据库的增量读写与 migration 统一经 `execute_sql_awaken_pro` / `search_objects_awaken_pro`。
+
+**Trade-off**:
+- (+) source、业务库、lease 和工具名称一一对应，降低误写支付库或误用迁移能力的风险。
+- (+) Awaken Pro 后续 migration 不再依赖 cognitive 的跨库临时切换语义。
+- (-) MCP 客户端需要刷新工具缓存后才能发现新工具；服务端可用 HTTP `tools/list` 与真实只读调用独立验收。

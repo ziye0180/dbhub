@@ -13,7 +13,8 @@
 | Source | 实际数据库 | 业务语义 | 使用频次 |
 |---|---|---|---|
 | `awakening` | `awaken_social_feed` @ 47.113.127.19（自建 MySQL） | 觉醒学院/觉醒星球: 内容、邀请、用户（`awaken_user`、`awaken_feed_content`、`awaken_category` 等 18 张表） | 高 |
-| `cognitive` | 默认 `awaken_payment`；migration 固定目标 `awaken_pro_prod` @ 阿里云 RDS（rm-wz9oiykl2xg37t3pu0o） | 认知图解 DML 仍落支付库；通过同一 `dbhub enable cognitive` lease 执行 Awaken Pro 受控结构迁移 | 高 |
+| `cognitive` | `awaken_payment` @ 阿里云 RDS（rm-wz9oiykl2xg37t3pu0o） | 认知图解 / 支付库受控 DML，不再承载 Awaken Pro migration | 高 |
+| `awaken_pro` | `awaken_pro_prod` @ 阿里云 RDS（rm-wz9oiykl2xg37t3pu0o） | 觉醒星球 Pro 受控 DML 与前向 migration；独立 lease、独立工具 | 高 |
 | `fast_test` | `fast_test` @ 外部 MySQL | 生产网关上的外部 MySQL 测试 source | 低 |
 | `awaken-redis` | Redis @ 生产内网 172.16.0.145:6379（prod）/ 本地 docker（dev） | awaken 后端 cache + session + queue | 中 |
 | `local` | `awaken_social_feed` @ 本地 Docker | 开发/测试。只在本地 Mac 有意义，prod 机上无意义（不部署） | 中 |
@@ -39,7 +40,8 @@
 - 所有 SQL source `readonly = true`；只有 ziye 在 DBHub 宿主机执行 `dbhub enable <source>` 后，目标 source 才在有界 TTL 内获得其配置的 capability（见 `project-decisions.md` D-010）
 - 未配置 `temporary_write_mode` 时默认 `dml`：只允许单条 INSERT / UPDATE / DELETE，且 UPDATE / DELETE 必须有顶层 WHERE；DDL 和包含写操作的多语句仍拒绝
 - 显式配置 `temporary_write_mode = "migration"` 时只允许 MySQL/MariaDB 默认库中的前向 CREATE TABLE / ALTER TABLE ADD / CREATE INDEX 及闭合的 guarded PREPARE 序列；拒绝普通 DML、`USE`、跨库写目标、DROP/TRUNCATE 和任意动态 SQL
-- `cognitive` 使用 `dml_and_migration`：普通 DML 始终落默认库 `awaken_payment`；只有通过 migration grammar 的 SQL 才会在连接级临时切到固定配置 `awaken_pro_prod`，执行后恢复默认库。目标库不能由 MCP 调用方传入
+- `cognitive` 使用 `dml`，所有写入都限定在默认库 `awaken_payment`；不得再作为 Awaken Pro migration lane
+- `awaken_pro` 使用 `dml_and_migration`，默认库与固定 migration target 都是 `awaken_pro_prod`；DML 和 migration 共用该 source 的短 lease，但 MCP 调用方仍不能选择或切换目标库
 - AI 不能通过 MCP 或 Bearer 自行开启 lease；纯只读多语句保持既有行为
 - 每个 SQL source 同时暴露 `execute_sql_<source>` 和 `search_objects_<source>`；AI 用 `search_objects` 的 `object_type = "schema"` 主动发现账号实际可见数据库，不需要先执行 `SHOW DATABASES`
 - Redis 侧是白名单只读工具集，写命令在 connector 类上没有 method，无法透传（见 decisions/redis-connector-decisions.md D-002）

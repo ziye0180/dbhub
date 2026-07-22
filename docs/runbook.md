@@ -14,7 +14,7 @@
 | 后端容器 | prod-B（39.108.79.68 / 内网 172.16.253.246）端口 8787，`/www/dbhub/` |
 | 镜像 | `registry.cn-hangzhou.aliyuncs.com/aiawaken/awaken-dbhub`（必须 amd64，见 pitfalls P010） |
 | Host 白名单 | 容器启动参数必须包含 `--allowed-hosts dbhub.aizmjx.com`，禁止使用 `*` |
-| 生产 source | awakening / cognitive / fast_test / awaken-redis（local、online_test 不在 prod，见 data-sources.md） |
+| 生产 source | awakening / cognitive / awaken_pro / fast_test / awaken-redis（local、online_test 不在 prod，见 data-sources.md） |
 | 本地 | ziye Mac docker，`localhost:8787`，`docker compose up -d` |
 | OpenResty 配置 | `/opt/1panel/www/sites/dbhub.aizmjx.com/proxy/root.conf`，改后 `docker exec <openresty容器> nginx -t` + `kill -HUP <master PID>` reload |
 | SSL | `*.aizmjx.com` 通配证书 |
@@ -85,12 +85,16 @@ docker compose down && docker compose up -d
 ssh root@39.108.79.68
 dbhub status
 dbhub enable awakening             # 默认 10 分钟
-dbhub enable cognitive             # 同一 lease：awaken_payment DML + awaken_pro_prod migration
+dbhub enable cognitive             # 仅 awaken_payment DML
+dbhub enable awaken_pro            # awaken_pro_prod DML + validated migration
 dbhub enable cognitive --ttl 30m   # 可选延长，最长 1 小时
+dbhub enable awaken_pro --ttl 30m  # 可选延长，最长 1 小时
 dbhub disable awakening
+dbhub disable cognitive
+dbhub disable awaken_pro
 ```
 
-`dbhub enable` 的命令格式不区分权限级别；CLI 会把目标 source 配置的 capability 固化进 lease。默认 `dml` 只允许受控 `INSERT/UPDATE/DELETE`；`cognitive` 的 hybrid profile 同时允许默认库 DML 和固定 `awaken_pro_prod` 目标的前向结构迁移。migration 拒绝普通 DML、`USE`、跨库写目标和破坏性 DDL。lease 过期后的写入一律拒绝。AI 收到 `WRITE_ACCESS_REQUIRED` 后只能提示上述命令，不能通过 MCP/Bearer 自行开启权限。
+`dbhub enable` 的命令格式不区分权限级别；CLI 会把目标 source 配置的 capability 固化进 lease。默认 `dml` 只允许受控 `INSERT/UPDATE/DELETE`；`cognitive` 只服务 `awaken_payment` DML。`awaken_pro` 的 `dml_and_migration` profile 同时允许默认库 `awaken_pro_prod` 的 guarded DML 与同库前向结构迁移。migration 拒绝普通 DML、`USE`、跨库写目标和破坏性 DDL。lease 过期后的写入一律拒绝。AI 收到 `WRITE_ACCESS_REQUIRED` 后只能提示上述命令，不能通过 MCP/Bearer 自行开启权限。
 
 每个生产 SQL source 必须同时配置 `execute_sql` 与 `search_objects`。后者让 AI 通过 `object_type = "schema"` 获取账号实际可见数据库；不要让工具描述指向一个未注册的 `search_objects`。
 
